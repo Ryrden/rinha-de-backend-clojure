@@ -38,6 +38,7 @@
 (defn -main
   "Main entry point - starts the HTTP server"
   []
-  (let [server (start-server :port 8080)]
+  (let [port (Integer/parseInt (or (System/getenv "PORT") "9999"))
+        server (start-server :port port)]
     (setup-shutdown-hook server)
     server))
