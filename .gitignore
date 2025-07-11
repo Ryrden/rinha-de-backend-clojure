@@ -1,2 +1,6 @@
 .idea/
 .cpcache/
+.calva/
+.clj-kondo/
+.lsp/
+rinha-clojure.iml
