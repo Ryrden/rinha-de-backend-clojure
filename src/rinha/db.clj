@@ -1,6 +1,5 @@
 (ns rinha.db
-  (:require [next.jdbc :as jdbc]
-            [next.jdbc.connection :as connection])
+  (:require [next.jdbc :as jdbc])
   (:import [com.zaxxer.hikari HikariConfig HikariDataSource]))
 
 (defn create-hikari-config

@@ -5,13 +5,13 @@
   "Returns a hello world message"
   [_request]
   {:status 200
-   :body (services/get-hello-world)})
+   :body (services/get-hello-world!)})
 
 (defn create-payment
   "Handles payment creation requests"
   [{:keys [body-params]}]
   (let [{:keys [correlationId amount]} body-params
-        result (services/process-payment correlationId amount)]
+        result (services/process-payment! correlationId amount)]
     (cond
       (and (not (:success result)) (= (:error result) "Invalid payment data"))
       {:status 400
