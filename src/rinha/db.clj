@@ -4,7 +4,11 @@
   (:import [com.zaxxer.hikari HikariConfig HikariDataSource]))
 
 (defn create-hikari-config
-  "Creates HikariCP configuration with optimized settings"
+  "Creates HikariCP configuration with optimized settings
+  
+  References for optimization settings used:
+  - PostgreSQL JDBC optimizations from: https://medium.com/@ahmettemelkundupoglu/optimizing-database-connections-with-hikaricp-in-spring-boot-3-and-java-21-80fab58cc1c7
+  - Connection pool sizing guidance from: https://medium.com/@nikita.ojamae_67727/exploring-the-hikari-connection-pool-configuration-aec0eb64d26b"
   [{:keys [jdbc-url username password
            minimum-idle maximum-pool-size
            connection-timeout idle-timeout
@@ -42,7 +46,7 @@
 (defn get-db-config
   "Gets database configuration from environment variables with optimized defaults"
   []
-  {:jdbc-url (or (System/getenv "DATABASE_URL") 
+  {:jdbc-url (or (System/getenv "DATABASE_URL")
                  "jdbc:postgresql://localhost:5432/rinha")
    :username (or (System/getenv "DATABASE_USER") "postgres")
    :password (or (System/getenv "DATABASE_PASSWORD") "postgres")
@@ -54,7 +58,7 @@
    :max-lifetime 1800000
    :leak-detection-threshold 60000})
 
-(defonce datasource 
+(defonce datasource
   (delay (create-datasource (get-db-config))))
 
 (defn get-connection
@@ -66,14 +70,3 @@
   "Executes a query with parameters"
   [query & params]
   (jdbc/execute! (get-connection) (vec (cons query params))))
-
-(defn execute-one!
-  "Executes a query expecting single result"
-  [query & params]
-  (jdbc/execute-one! (get-connection) (vec (cons query params))))
-
-(defn close-datasource!
-  "Closes the datasource connection pool"
-  []
-  (when (realized? datasource)
-    (.close @datasource))) 
