@@ -45,10 +45,9 @@
 (defn get-db-config
   "Gets database configuration from environment variables with optimized defaults"
   []
-  {:jdbc-url (or (System/getenv "DATABASE_URL")
-                 "jdbc:postgresql://localhost:5432/rinha")
-   :username (or (System/getenv "DATABASE_USER") "postgres")
-   :password (or (System/getenv "DATABASE_PASSWORD") "postgres")
+  {:jdbc-url (System/getenv "DATABASE_URL")
+   :username (System/getenv "DATABASE_USER")
+   :password (System/getenv "DATABASE_PASSWORD")
    :pool-name "rinha-hikari-pool"
    :minimum-idle 2
    :maximum-pool-size 10

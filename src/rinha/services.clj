@@ -7,8 +7,8 @@
             [muuntaja.core :as m])
   (:import [java.time Instant]))
 
-(def ^:private payment-processor-default-url "http://payment-processor-default:8080")
-(def ^:private payment-processor-fallback-url "http://payment-processor-fallback:8080")
+(def ^:private payment-processor-default-url (System/getenv "PROCESSOR_DEFAULT_URL"))
+(def ^:private payment-processor-fallback-url (System/getenv "PROCESSOR_FALLBACK_URL"))
 
 (defn get-hello-world!
   "Returns a hello world message"
@@ -29,17 +29,16 @@
                                  {:headers {"Content-Type" "application/json"}
                                   :body (m/encode m/instance "application/json" payload)})]
         (case (:status response)
-          200 (try
+          200 (do
                 (db/execute!
                  "INSERT INTO payments (correlation_id, amount, requested_at, processor) VALUES (?::uuid, ?, ?::timestamp, ?)"
                  correlation-id amount requested-at (name processor-type))
-                {:success true :processor processor-type}
-                (catch Exception e
-                  {:success false :error (str "Database error: " (.getMessage e))}))
-          422 {:success false :error "Payment already exists"}
-          {:success false :error (str "Payment processor error: HTTP " (:status response))}))
+                {:status 200 :processor processor-type})
+          422 {:status 422 :error "Payment already exists"}
+          {:status (:status response) :error (str "Payment processor error:" (:body response))}))
       (catch Exception e
-        {:success false :error (str "Network error: " (.getMessage e))}))))
+        (println "Network error with" processor-type "processor:" (.getMessage e))
+        {:status 500 :error (str "Network error: " (.getMessage e))}))))
 
 (defn ^:private process-payment-with-fallback!
   "Processes payment with fallback logic - tries default first, then fallback"
@@ -54,7 +53,7 @@
                                                            correlation-id
                                                            amount
                                                            requested-at))]
-    (if (:success default-result)
+    (if (= (:status default-result) 200)
       default-result
       @fallback-result)))
 
@@ -66,19 +65,18 @@
       (let [result (process-payment-with-fallback! correlation-id amount requested-at)]
         (async/>! result-chan result))
       (catch Exception e
-        (async/>! result-chan {:success false :error (str "Processing error: " (.getMessage e))})))))
+        (println "Processing error:" (.getMessage e))
+        (async/>! result-chan {:status 500 :error (str "Processing error: " (.getMessage e))})))))
 
 (defn process-payment!
-  "Creates a new payment - handles business logic and validation"
+  "Creates a new payment - handles business logic processing"
   [correlation-id amount]
-  (if-not (logic/valid-payment-data? {:correlationId correlation-id :amount amount})
-    {:success false :error "Invalid payment data"}
-    (let [requested-at (str (Instant/now))
-          result-chan (async/chan 1)]
-      (process-payment-async! correlation-id amount requested-at result-chan)
-      (async/alt!!
-        result-chan ([result] result)
-        (async/timeout 8000) {:success false :error "Processing timeout"}))))
+  (let [requested-at (str (Instant/now))
+        result-chan (async/chan 1)]
+    (process-payment-async! correlation-id amount requested-at result-chan)
+    (async/alt!!
+      result-chan ([result] result)
+      (async/timeout 8000) {:status 408 :error "Processing timeout"})))
 
 (defn ^:private execute-summary-query!
   "Executes the summary query with proper error handling"
