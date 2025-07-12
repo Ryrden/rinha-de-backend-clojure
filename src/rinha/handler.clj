@@ -1,5 +1,6 @@
 (ns rinha.handler
-  (:require [rinha.services :as services]))
+  (:require [rinha.services :as services]
+            [rinha.logic :as logic]))
 
 (defn hello-world
   "Returns a hello world message"
@@ -11,20 +12,23 @@
   "Handles payment creation requests"
   [{:keys [body-params]}]
   (let [{:keys [correlationId amount]} body-params
-        result (services/process-payment! correlationId amount)]
+        process-payment (delay (services/process-payment! correlationId amount))
+        result (if (logic/valid-payment-data? {:correlationId correlationId :amount amount})
+                 @process-payment
+                 {:status 400 :error "Invalid payment data"})]
     (cond
-      (and (not (:success result)) (= (:error result) "Invalid payment data"))
+      (= (:status result) 400)
       {:status 400
        :body {:error "Invalid payment data"
               :message "correlationId must be a valid UUID and amount must be a positive number"}}
-
-      (:success result)
+      
+      (= (:status result) 200)
       {:status 202
        :body {:message "Payment processed successfully"
               :processor (name (:processor result))}}
-
+      
       :else
-      {:status 500
+      {:status (:status result)
        :body {:error (:error result)}})))
 
 (defn payments-summary

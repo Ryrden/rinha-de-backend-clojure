@@ -4,7 +4,7 @@ services:
     environment:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=rinha
+      - POSTGRES_DB=rinha_db
     volumes:
       - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
       - db_data:/var/lib/postgresql/data
@@ -39,8 +39,10 @@ services:
     # image: ryrden/rinha-de-backend-clojure:latest
     build: .
     environment:
-      - PORT=9997
-      - DATABASE_URL=jdbc:postgresql://db:5432/rinha
+      - PORT=8080
+      - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
+      - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
+      - DATABASE_URL=jdbc:postgresql://db:5432/rinha_db
       - DATABASE_USER=postgres
       - DATABASE_PASSWORD=postgres
     deploy:
@@ -58,8 +60,10 @@ services:
     # image: ryrden/rinha-de-backend-clojure:latest
     build: .
     environment:
-      - PORT=9998
-      - DATABASE_URL=jdbc:postgresql://db:5432/rinha
+      - PORT=8081
+      - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
+      - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
+      - DATABASE_URL=jdbc:postgresql://db:5432/rinha_db
       - DATABASE_USER=postgres
       - DATABASE_PASSWORD=postgres
     deploy:
