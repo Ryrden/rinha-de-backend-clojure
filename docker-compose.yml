@@ -1,4 +1,33 @@
 services:
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "9999:9999"
+    volumes:
+      - ./scripts/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - api-01
+      - api-02
+    deploy:
+      resources:
+        limits:
+          cpus: "5"
+          memory: "1gb"
+    networks:
+      - backend
+  
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    deploy:
+      resources:
+        limits:
+          cpus: "5"
+          memory: "1gb"
+    networks:
+      - backend
+
   db: 
     image: postgres:17-alpine
     environment:
@@ -18,23 +47,6 @@ services:
     networks:
       - backend
 
-  nginx:
-    image: nginx:alpine
-    ports:
-      - "9999:9999"
-    volumes:
-      - ./scripts/nginx.conf:/etc/nginx/nginx.conf:ro
-    depends_on:
-      - api-01
-      - api-02
-    deploy:
-      resources:
-        limits:
-          cpus: "5"
-          memory: "1gB"
-    networks:
-      - backend
-
   api-01:
     # image: ryrden/rinha-de-backend-clojure:latest
     build: .
@@ -45,6 +57,7 @@ services:
       - DATABASE_URL=jdbc:postgresql://db:5432/rinha_db
       - DATABASE_USER=postgres
       - DATABASE_PASSWORD=postgres
+      - REDIS_URL=redis://redis:6379
     deploy:
       resources:
         limits:
@@ -52,6 +65,7 @@ services:
           memory: "1gB"
     depends_on:
       - db
+      - redis
     networks:
       - backend
       - payment-processor
@@ -66,6 +80,7 @@ services:
       - DATABASE_URL=jdbc:postgresql://db:5432/rinha_db
       - DATABASE_USER=postgres
       - DATABASE_PASSWORD=postgres
+      - REDIS_URL=redis://redis:6379
     deploy:
       resources:
         limits:
@@ -73,6 +88,7 @@ services:
           memory: "1gB"
     depends_on:
       - db
+      - redis
     networks:
       - backend
       - payment-processor
