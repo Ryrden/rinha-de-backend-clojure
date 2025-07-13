@@ -13,8 +13,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.3"
-          memory: "62MB"
+          cpus: "5"
+          memory: "1gB"
     networks:
       - backend
 
@@ -30,8 +30,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.2"
-          memory: "32MB"
+          cpus: "5"
+          memory: "1gB"
     networks:
       - backend
 
@@ -48,8 +48,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: "128MB"
+          cpus: "5"
+          memory: "1gB"
     depends_on:
       - db
     networks:
@@ -69,8 +69,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: "128MB"
+          cpus: "5"
+          memory: "1gB"
     depends_on:
       - db
     networks:
