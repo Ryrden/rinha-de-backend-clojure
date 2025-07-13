@@ -3,6 +3,7 @@
             [clojure.string :as str]
             [org.httpkit.client :as http]
             [rinha.db :as db]
+            [rinha.redis :as redis]
             [rinha.logic :as logic]
             [muuntaja.core :as m])
   (:import [java.time Instant]))
@@ -17,6 +18,54 @@
    :status    "success"
    :timestamp (System/currentTimeMillis)})
 
+(defn check-processor-health!
+  "Checks processor health - respects 5-second rate limit"
+  [processor-url processor-type]
+  (when (redis/should-check-health? processor-type)
+    (try
+      (let [response @(http/get (str processor-url "/payments/service-health"))]
+        (condp = (:status response)
+          200 (let [health-data (m/decode m/instance "application/json" (:body response))]
+                (redis/set-processor-health! processor-type
+                                             {:failing (:failing health-data)
+                                              :minResponseTime (:minResponseTime health-data)
+                                              :last-check (System/currentTimeMillis)}))
+          429 (println "Payment processor is rate limited")
+          (do
+            (println "Error in health check for" (name processor-type) ":" response)
+            (redis/set-processor-health! processor-type
+                                         {:failing true
+                                          :minResponseTime 5000
+                                          :last-check (System/currentTimeMillis)}))))
+      (catch Exception e
+        (println "Health check failed for" (name processor-type) ":" (.getMessage e))))))
+
+
+(defn check-both-processors!
+  "Checks both processors health"
+  []
+  (check-processor-health! payment-processor-default-url :default)
+  (check-processor-health! payment-processor-fallback-url :fallback))
+
+(defn ^:private evaluate-circuit-breaker!
+  "Evaluates and updates circuit breaker state based on processors health"
+  [default-health fallback-health]
+  (let [should-activate (redis/should-circuit-breaker-be-active? default-health fallback-health)
+        is-active (redis/is-circuit-breaker-active?)]
+    (cond
+      ; Both processors are failing and circuit breaker is not active -> activate it
+      (and should-activate (not is-active))
+      (do
+        (println "Circuit breaker activated: both processors are failing")
+        (redis/set-circuit-breaker-state! true))
+      
+      ; At least one processor is healthy and circuit breaker is active -> deactivate it
+      (and (not should-activate) is-active)
+      (do
+        (println "Circuit breaker deactivated: at least one processor is healthy")
+        (redis/reset-circuit-breaker!)))
+    (println "Circuit breaker state after evaluation:" (redis/is-circuit-breaker-active?))))
+
 (defn ^:private send-payment-to-processor!
   "Sends payment to a specific processor"
   [processor-url processor-type correlation-id amount requested-at]
@@ -27,7 +76,9 @@
     (try
       (let [response @(http/post url
                                  {:headers {"Content-Type" "application/json"}
-                                  :body (m/encode m/instance "application/json" payload)})]
+                                  :body (m/encode m/instance "application/json" payload)
+                                  :timeout 350})]
+        (println "Response:" response)
         (case (:status response)
           200 (do
                 (db/execute!
@@ -35,34 +86,97 @@
                  correlation-id amount requested-at (name processor-type))
                 {:status 200 :processor processor-type})
           422 {:status 422 :error "Payment already exists"}
-          {:status (:status response) :error (str "Payment processor error:" (:body response))}))
+          (do
+            (check-both-processors!)
+            {:status 500 :error (str "error: " (:body response))})))
       (catch Exception e
-        (println "Network error with" processor-type "processor:" (.getMessage e))
-        {:status 500 :error (str "Network error: " (.getMessage e))}))))
+        (println "Unexpected error in payment processing:" (.getMessage e))
+        (check-both-processors!)
+        {:status 500 :error (str "error: " (.getMessage e))}))))
 
-(defn ^:private process-payment-with-fallback!
-  "Processes payment with fallback logic - tries default first, then fallback"
+(defn ^:private retry-payment-processor!
+  "Retries payment processor with exponential backoff"
+  [processor-url processor-type correlation-id amount requested-at max-retries delay-ms]
+  (loop [attempt 1]
+    (let [result (send-payment-to-processor! processor-url processor-type correlation-id amount requested-at)]
+      (if (or (= (:status result) 200) 
+              (= (:status result) 422) 
+              (>= attempt max-retries))
+        result
+        (do
+          (println (str "Attempt " attempt " failed for " (name processor-type) ", retrying in " delay-ms "ms..."))
+          (Thread/sleep delay-ms)
+          (recur (inc attempt)))))))
+
+(defn ^:private process-payment-with-smart-routing!
+  "Processes payment with smart routing based on health status"
   [correlation-id amount requested-at]
-  (let [default-result (send-payment-to-processor! payment-processor-default-url
-                                                   :default
-                                                   correlation-id
-                                                   amount
-                                                   requested-at)
-        fallback-result (delay (send-payment-to-processor! payment-processor-fallback-url
-                                                           :fallback
-                                                           correlation-id
-                                                           amount
-                                                           requested-at))]
-    (if (= (:status default-result) 200)
-      default-result
-      @fallback-result)))
+  (let [default-health (redis/get-processor-health :default)
+        fallback-health (redis/get-processor-health :fallback)]
+    
+    ; Evaluate circuit breaker state
+    (evaluate-circuit-breaker! default-health fallback-health)
+    
+    ; Check if circuit breaker is active
+    (cond
+      (redis/is-circuit-breaker-active?)
+      (do
+        (println "Circuit breaker is active - rejecting request")
+        {:status 503 :error "Service temporarily unavailable - both processors are failing"})
+      
+      ; Circuit breaker allows test request
+      (redis/should-test-circuit-breaker?)
+      (do
+        (println "Circuit breaker allowing test request")
+        (let [best-choice (logic/get-best-processor default-health
+                                                    fallback-health
+                                                    payment-processor-default-url
+                                                    payment-processor-fallback-url)
+              test-result (send-payment-to-processor! (:url best-choice)
+                                                      (:processor best-choice)
+                                                      correlation-id
+                                                      amount
+                                                      requested-at)]
+          (if (= (:status test-result) 200)
+            (do
+              (println "Test request successful - resetting circuit breaker")
+              (redis/reset-circuit-breaker!)
+              test-result)
+            (do
+              (println "Test request failed - keeping circuit breaker active")
+              {:status 503 :error "Service temporarily unavailable - test request failed"}))))
+      
+      ; Normal processing
+      :else
+      (let [best-choice (logic/get-best-processor default-health
+                                                  fallback-health
+                                                  payment-processor-default-url
+                                                  payment-processor-fallback-url)
+            primary-result (retry-payment-processor! (:url best-choice)
+                                                     (:processor best-choice)
+                                                     correlation-id
+                                                     amount
+                                                     requested-at
+                                                     3
+                                                     10)]
+        (condp = (:status primary-result)
+          200 primary-result
+          422 primary-result
+          (let [fallback-choice (if (= (:processor best-choice) :default)
+                                  {:processor :fallback :url payment-processor-fallback-url}
+                                  {:processor :default :url payment-processor-default-url})]
+            (send-payment-to-processor! (:url fallback-choice)
+                                        (:processor fallback-choice)
+                                        correlation-id
+                                        amount
+                                        requested-at)))))))
 
 (defn ^:private process-payment-async!
-  "Processes a payment asynchronously with fallback"
+  "Processes a payment asynchronously with smart routing"
   [correlation-id amount requested-at result-chan]
   (async/go
     (try
-      (let [result (process-payment-with-fallback! correlation-id amount requested-at)]
+      (let [result (process-payment-with-smart-routing! correlation-id amount requested-at)]
         (async/>! result-chan result))
       (catch Exception e
         (println "Processing error:" (.getMessage e))

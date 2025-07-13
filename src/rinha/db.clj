@@ -68,3 +68,13 @@
   "Executes a query with parameters"
   [query & params]
   (jdbc/execute! (get-connection) (vec (cons query params))))
+
+(defn ping
+  "Pings the database to check connectivity"
+  []
+  (try
+    (jdbc/execute! (get-connection) ["SELECT 1"])
+    true
+    (catch Exception e
+      (println "Database ping failed:" (.getMessage e))
+      false)))
