@@ -42,6 +42,16 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=rinha_db
+    command: >
+      postgres
+      -c shared_buffers=8MB
+      -c max_connections=20
+      -c work_mem=1MB
+      -c maintenance_work_mem=4MB
+      -c effective_cache_size=16MB
+      -c checkpoint_completion_target=0.9
+      -c wal_buffers=1MB
+      -c default_statistics_target=10
     volumes:
       - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
       - db_data:/var/lib/postgresql/data
@@ -80,11 +90,10 @@ services:
     ports:
       - "8080:8080"
     healthcheck:
-      test: curl --fail http://localhost:8080/ || exit 1
-      interval: 40s
-      timeout: 30s
-      retries: 3
-      start_period: 40s
+      test: ["CMD", "curl", "-f", "http://localhost:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     depends_on:
       db:
         condition: service_healthy
@@ -113,11 +122,10 @@ services:
     ports:
       - "8081:8081"
     healthcheck:
-      test: curl --fail http://localhost:8081/ || exit 1
-      interval: 40s
-      timeout: 30s
-      retries: 3
-      start_period: 40s
+      test: ["CMD", "curl", "-f", "http://localhost:8081/"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
     depends_on:
       db:
         condition: service_healthy

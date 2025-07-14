@@ -1,10 +1,10 @@
 (ns rinha.services
   (:require [clojure.core.async :as async]
-            [clojure.string :as str]
             [org.httpkit.client :as http]
             [rinha.db :as db]
             [rinha.redis :as redis]
             [rinha.logic :as logic]
+            [rinha.strategy :as strategy]
             [muuntaja.core :as m])
   (:import [java.time Instant]))
 
@@ -18,49 +18,9 @@
    :status    "success"
    :timestamp (System/currentTimeMillis)})
 
-(defn check-processor-health!
-  "Checks processor health - respects 5-second rate limit"
-  [processor-url processor-type]
-  (when (redis/should-check-health? processor-type)
-    (try
-      (let [response @(http/get (str processor-url "/payments/service-health"))]
-        (condp = (:status response)
-          200 (let [health-data (m/decode m/instance "application/json" (:body response))]
-                (redis/set-processor-health! processor-type
-                                             {:failing (:failing health-data)
-                                              :minResponseTime (:minResponseTime health-data)
-                                              :last-check (System/currentTimeMillis)}))
-          429 (println "Payment processor is rate limited")
-          (do
-            (println "Error in health check for" (name processor-type) ":" response)
-            (redis/set-processor-health! processor-type
-                                         {:failing true
-                                          :minResponseTime 5000
-                                          :last-check (System/currentTimeMillis)}))))
-      (catch Exception e
-        (println "Health check failed for" (name processor-type) ":" (.getMessage e))))))
-
-
-(defn check-both-processors!
-  "Checks both processors health"
-  []
-  (check-processor-health! payment-processor-default-url :default)
-  (check-processor-health! payment-processor-fallback-url :fallback))
-
-(defn ^:private evaluate-circuit-breaker!
-  "Evaluates and updates circuit breaker state based on processors health"
-  [default-health fallback-health]
-  (let [should-activate (redis/should-circuit-breaker-be-active? default-health fallback-health)
-        is-active (redis/is-circuit-breaker-active?)]
-    (cond
-      (and should-activate (not is-active))
-      (redis/set-circuit-breaker-state! true)
-      (and (not should-activate) is-active)
-      (redis/reset-circuit-breaker!))))
-
 (defn ^:private send-payment-to-processor!
-  "Sends payment to a specific processor"
-  [processor-url processor-type correlation-id amount requested-at]
+  "Sends payment to a specific processor - only does HTTP POST"
+  [processor-url correlation-id amount requested-at]
   (let [url (str processor-url "/payments")
         payload {:correlationId correlation-id
                  :amount amount
@@ -69,98 +29,118 @@
       (let [response @(http/post url
                                  {:headers {"Content-Type" "application/json"}
                                   :body (m/encode m/instance "application/json" payload)
-                                  :timeout 200})] 
-        (case (:status response)
-          200 (do
-                (db/execute!
-                 "INSERT INTO payments (correlation_id, amount, requested_at, processor) VALUES (?::uuid, ?, ?::timestamp, ?)"
-                 correlation-id amount requested-at (name processor-type))
-                {:status 200 :processor processor-type})
-          422 {:status 422 :error "Payment already exists"}
-          (do
-            (check-both-processors!)
-            {:status 500 :error (str "error: " (:body response))})))
+                                  :timeout 200})]
+        {:status (:status response)
+         :body (:body response)})
       (catch Exception e
-        (println "Unexpected error in payment processing:" (.getMessage e))
-        (check-both-processors!)
-        {:status 500 :error (str "error: " (.getMessage e))}))))
+        (println "HTTP request failed:" (.getMessage e))
+        {:status nil :error (.getMessage e)}))))
 
-(defn ^:private retry-payment-processor!
-  "Retries payment processor with exponential backoff"
-  [processor-url processor-type correlation-id amount requested-at]
-  (loop [attempt 1 max-retries 5 delay-ms 10]
-    (let [result (send-payment-to-processor! processor-url processor-type correlation-id amount requested-at)]
-      (if (or (= (:status result) 200)
-              (= (:status result) 422)
-              (> attempt max-retries))
-        result
-        (do
-          (println (str "Attempt " attempt " failed for " (name processor-type) ", retrying in " delay-ms "ms..."))
-          (Thread/sleep delay-ms)
-          (recur (inc attempt) max-retries delay-ms))))))
+(defn ^:private save-payment-to-db!
+  "Saves payment to database"
+  [correlation-id amount requested-at processor]
+  (try
+    (db/execute!
+     "INSERT INTO payments (correlation_id, amount, requested_at, processor) VALUES (?::uuid, ?, ?::timestamp, ?)"
+     correlation-id amount requested-at (name processor))
+    true
+    (catch Exception e
+      (println "Database save failed:" (.getMessage e))
+      false)))
 
-(defn ^:private process-payment-with-smart-routing!
-  "Processes payment with smart routing based on health status"
+(defn ^:private process-payment-with-routing!
+  "Processes payment with smart routing based on business rules"
   [correlation-id amount requested-at]
   (let [default-health (redis/get-processor-health :default)
-        fallback-health (redis/get-processor-health :fallback)]
-
-    (evaluate-circuit-breaker! default-health fallback-health)
-
-    (cond
-      (redis/is-circuit-breaker-active?)
-      {:status 503 :error "Service temporarily unavailable - circuit breaker active"}
-
-      (:active (redis/get-circuit-breaker-state))
-      (do
-        (println "Circuit breaker allowing test request")
-        (let [best-choice (logic/get-best-processor default-health
-                                                    fallback-health
-                                                    payment-processor-default-url
-                                                    payment-processor-fallback-url)
-              test-result (retry-payment-processor! (:url best-choice)
-                                                      (:processor best-choice)
-                                                      correlation-id
-                                                      amount
-                                                      requested-at
-                                                      )]
-          (if (= (:status test-result) 200)
-            (do
-              (println "Test request successful - resetting circuit breaker")
-              (redis/reset-circuit-breaker!)
-              test-result)
-            (do
-              (println "Test request failed - keeping circuit breaker active")
-              {:status 503 :error "Service temporarily unavailable - test request failed"}))))
-
-      :else
-      (let [best-choice (logic/get-best-processor default-health
-                                                  fallback-health
-                                                  payment-processor-default-url
-                                                  payment-processor-fallback-url)
-            primary-result (retry-payment-processor! (:url best-choice)
-                                                     (:processor best-choice)
+        fallback-health (redis/get-processor-health :fallback)
+        best-choice (logic/get-best-processor default-health
+                                              fallback-health
+                                              payment-processor-default-url
+                                              payment-processor-fallback-url)
+        
+        ;; Try primary processor
+        primary-response (send-payment-to-processor! (:url best-choice)
                                                      correlation-id
                                                      amount
-                                                     requested-at)]
-        (condp = (:status primary-result)
-          200 primary-result
-          422 primary-result
-          (let [fallback-choice (if (= (:processor best-choice) :default)
-                                  {:processor :fallback :url payment-processor-fallback-url}
-                                  {:processor :default :url payment-processor-default-url})]
-            (send-payment-to-processor! (:url fallback-choice)
-                                        (:processor fallback-choice)
-                                        correlation-id
-                                        amount
-                                        requested-at)))))))
+                                                     requested-at)
+        {:keys [status error processor]} (logic/parse-payment-response primary-response (:processor best-choice))]
+    
+    (cond
+      ;; Success or already exists - save to DB if success
+      (or (= status 200) (= status 422))
+      (do
+        (when (= status 200)
+          (save-payment-to-db! correlation-id amount requested-at processor))
+        {:status status :processor processor :error error})
+      
+      ;; Status 500 - Processor failed, check both processors and choose by minResponseTime
+      (logic/should-check-both-processors-after-500? status)
+      (do
+        (strategy/check-both-processors! payment-processor-default-url payment-processor-fallback-url)
+        (let [updated-default-health (redis/get-processor-health :default)
+              updated-fallback-health (redis/get-processor-health :fallback)
+              best-choice-after-check (logic/choose-processor-by-min-response-time 
+                                       updated-default-health 
+                                       updated-fallback-health
+                                       payment-processor-default-url
+                                       payment-processor-fallback-url)
+              retry-response (send-payment-to-processor! (:url best-choice-after-check)
+                                                         correlation-id
+                                                         amount
+                                                         requested-at)
+              {:keys [status error processor]} (logic/parse-payment-response retry-response (:processor best-choice-after-check))]
+          (when (= status 200)
+            (save-payment-to-db! correlation-id amount requested-at processor))
+          {:status status :processor processor :error error}))
+      
+      ;; Status nil - Timeout, try fallback
+      (logic/should-try-fallback-after-timeout? status)
+      (let [fallback-choice (logic/get-fallback-processor (:processor best-choice)
+                                                          payment-processor-default-url
+                                                          payment-processor-fallback-url)
+            fallback-response (send-payment-to-processor! (:url fallback-choice)
+                                                          correlation-id
+                                                          amount
+                                                          requested-at)
+            {:keys [status error processor]} (logic/parse-payment-response fallback-response (:processor fallback-choice))]
+        (cond
+          ;; Fallback succeeded
+          (or (= status 200) (= status 422))
+          (do
+            (when (= status 200)
+              (save-payment-to-db! correlation-id amount requested-at processor))
+            {:status status :processor processor :error error})
+          
+          ;; Fallback also timed out - check both processors and choose by minResponseTime 
+          :else
+          (do
+            (strategy/check-both-processors! payment-processor-default-url payment-processor-fallback-url)
+            (let [updated-default-health (redis/get-processor-health :default)
+                  updated-fallback-health (redis/get-processor-health :fallback)
+                  best-choice-after-check (logic/choose-processor-by-min-response-time 
+                                           updated-default-health 
+                                           updated-fallback-health
+                                           payment-processor-default-url
+                                           payment-processor-fallback-url)
+                  retry-response (send-payment-to-processor! (:url best-choice-after-check)
+                                                             correlation-id
+                                                             amount
+                                                             requested-at)
+                  {:keys [status error processor]} (logic/parse-payment-response retry-response (:processor best-choice-after-check))]
+              (when (= status 200)
+                (save-payment-to-db! correlation-id amount requested-at processor))
+              {:status status :processor processor :error error}))))
+      
+      ;; Other errors
+      :else
+      {:status status :processor processor :error error})))
 
 (defn ^:private process-payment-async!
-  "Processes a payment asynchronously with smart routing"
+  "Processes a payment asynchronously"
   [correlation-id amount requested-at result-chan]
   (async/go
     (try
-      (let [result (process-payment-with-smart-routing! correlation-id amount requested-at)]
+      (let [result (process-payment-with-routing! correlation-id amount requested-at)]
         (async/>! result-chan result))
       (catch Exception e
         (println "Processing error:" (.getMessage e))

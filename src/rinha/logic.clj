@@ -12,6 +12,61 @@
    (number? amount)
    (pos? amount)))
 
+(defn should-retry-payment?
+  "Determines if a payment should be retried based on status and attempt count"
+  [http-status attempt max-attempts]
+  (and (not (contains? #{200 422} http-status))
+       (< attempt max-attempts)))
+
+(defn get-fallback-processor
+  "Returns the fallback processor info based on the primary processor"
+  [primary-processor default-url fallback-url]
+  (if (= primary-processor :default)
+    {:processor :fallback :url fallback-url}
+    {:processor :default :url default-url}))
+
+(defn parse-payment-response
+  "Parses payment processor response into standardized format"
+  [response processor-type]
+  (let [status (:status response)]
+    (cond
+      (= status 200) {:status 200 :processor processor-type}
+      (= status 422) {:status 422 :error "Payment already exists"} 
+      (= status 500) {:status 500 :error "Processor failed"}
+      (nil? status) {:status nil :error "Request timeout"}
+      :else {:status status :error (str "HTTP error: " status)})))
+
+(defn should-try-fallback?
+  "Determines if fallback processor should be tried based on primary result"
+  [primary-result]
+  (let [status (:status primary-result)]
+    (and (not (contains? #{200 422} status))
+         (not (nil? status)))))
+
+(defn calculate-retry-delay
+  "Calculates exponential backoff delay for retry attempts"
+  [attempt base-delay]
+  (* base-delay (Math/pow 2 (dec attempt))))
+
+(defn choose-processor-by-min-response-time
+  "Chooses processor with smaller minResponseTime"
+  [default-health fallback-health default-url fallback-url]
+  (let [default-response-time (:minResponseTime default-health 0)
+        fallback-response-time (:minResponseTime fallback-health 0)]
+    (if (<= default-response-time fallback-response-time)
+      {:processor :default :url default-url}
+      {:processor :fallback :url fallback-url})))
+
+(defn should-check-both-processors-after-500?
+  "Determines if both processors should be checked after 500 error"
+  [status]
+  (= status 500))
+
+(defn should-try-fallback-after-timeout?
+  "Determines if fallback should be tried after timeout"
+  [status]
+  (nil? status))
+
 (defn ^:private calculate-processor-score
   "Calculates a comprehensive score for a processor considering multiple factors:
    - Performance: Response time with exponential penalty for high latency
