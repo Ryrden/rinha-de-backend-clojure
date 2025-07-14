@@ -69,8 +69,7 @@
       (let [response @(http/post url
                                  {:headers {"Content-Type" "application/json"}
                                   :body (m/encode m/instance "application/json" payload)
-                                  :timeout 150})]
-        (println "Response:" response)
+                                  :timeout 200})] 
         (case (:status response)
           200 (do
                 (db/execute!
@@ -109,6 +108,9 @@
     (evaluate-circuit-breaker! default-health fallback-health)
 
     (cond
+      (redis/is-circuit-breaker-active?)
+      {:status 503 :error "Service temporarily unavailable - circuit breaker active"}
+
       (:active (redis/get-circuit-breaker-state))
       (do
         (println "Circuit breaker allowing test request")

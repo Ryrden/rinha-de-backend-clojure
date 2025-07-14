@@ -8,6 +8,4 @@ RUN clojure -P
 
 COPY src/ src/
 
-EXPOSE 9999
-
 CMD ["clojure", "-M", "-m", "rinha.core"] 
