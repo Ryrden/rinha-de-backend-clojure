@@ -69,7 +69,8 @@
       (let [response @(http/post url
                                  {:headers {"Content-Type" "application/json"}
                                   :body (m/encode m/instance "application/json" payload)
-                                  :timeout 350})] 
+                                  :timeout 150})]
+        (println "Response:" response)
         (case (:status response)
           200 (do
                 (db/execute!
@@ -84,6 +85,20 @@
         (println "Unexpected error in payment processing:" (.getMessage e))
         (check-both-processors!)
         {:status 500 :error (str "error: " (.getMessage e))}))))
+
+(defn ^:private retry-payment-processor!
+  "Retries payment processor with exponential backoff"
+  [processor-url processor-type correlation-id amount requested-at]
+  (loop [attempt 1 max-retries 5 delay-ms 10]
+    (let [result (send-payment-to-processor! processor-url processor-type correlation-id amount requested-at)]
+      (if (or (= (:status result) 200)
+              (= (:status result) 422)
+              (> attempt max-retries))
+        result
+        (do
+          (println (str "Attempt " attempt " failed for " (name processor-type) ", retrying in " delay-ms "ms..."))
+          (Thread/sleep delay-ms)
+          (recur (inc attempt) max-retries delay-ms))))))
 
 (defn ^:private process-payment-with-smart-routing!
   "Processes payment with smart routing based on health status"
@@ -101,11 +116,12 @@
                                                     fallback-health
                                                     payment-processor-default-url
                                                     payment-processor-fallback-url)
-              test-result (send-payment-to-processor! (:url best-choice)
+              test-result (retry-payment-processor! (:url best-choice)
                                                       (:processor best-choice)
                                                       correlation-id
                                                       amount
-                                                      requested-at)]
+                                                      requested-at
+                                                      )]
           (if (= (:status test-result) 200)
             (do
               (println "Test request successful - resetting circuit breaker")
@@ -120,11 +136,11 @@
                                                   fallback-health
                                                   payment-processor-default-url
                                                   payment-processor-fallback-url)
-            primary-result (send-payment-to-processor! (:url best-choice)
-                                                       (:processor best-choice)
-                                                       correlation-id
-                                                       amount
-                                                       requested-at)]
+            primary-result (retry-payment-processor! (:url best-choice)
+                                                     (:processor best-choice)
+                                                     correlation-id
+                                                     amount
+                                                     requested-at)]
         (condp = (:status primary-result)
           200 primary-result
           422 primary-result
