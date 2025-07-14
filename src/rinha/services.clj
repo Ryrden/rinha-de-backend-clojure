@@ -2,7 +2,6 @@
   (:require [clojure.core.async :as async]
             [clojure.string :as str]
             [org.httpkit.client :as http]
-            [rinha.db :as db]
             [rinha.redis :as redis]
             [rinha.logic :as logic]
             [muuntaja.core :as m])
@@ -66,39 +65,38 @@
                  :amount amount
                  :requestedAt requested-at}]
     (try
-      (let [response @(http/post url
-                                 {:headers {"Content-Type" "application/json"}
-                                  :body (m/encode m/instance "application/json" payload)
-                                  :timeout 150})]
-        (println "Response:" response)
-        (case (:status response)
-          200 (do
-                (db/execute!
-                 "INSERT INTO payments (correlation_id, amount, requested_at, processor) VALUES (?::uuid, ?, ?::timestamp, ?)"
-                 correlation-id amount requested-at (name processor-type))
-                {:status 200 :processor processor-type})
-          422 {:status 422 :error "Payment already exists"}
-          (do
-            (check-both-processors!)
-            {:status 500 :error (str "error: " (:body response))})))
+      ;; Check if payment already exists in Redis
+      (if (redis/payment-exists? correlation-id)
+        {:status 422 :error "Payment already exists"}
+        (let [response @(http/post url
+                                   {:headers {"Content-Type" "application/json"}
+                                    :body (m/encode m/instance "application/json" payload)})]
+          (case (:status response)
+            200 (do
+                  ;; Store payment in Redis
+                  (redis/store-payment! correlation-id amount requested-at processor-type)
+                  {:status 200 :processor processor-type})
+            422 {:status 422 :error "Payment already exists"}
+            (do
+              (check-both-processors!)
+              {:status 500 :error (str "error: " (:body response))}))))
       (catch Exception e
         (println "Unexpected error in payment processing:" (.getMessage e))
         (check-both-processors!)
         {:status 500 :error (str "error: " (.getMessage e))}))))
 
 (defn ^:private retry-payment-processor!
-  "Retries payment processor with exponential backoff"
+  "Retries payment processor with fast retry strategy"
   [processor-url processor-type correlation-id amount requested-at]
-  (loop [attempt 1 max-retries 5 delay-ms 10]
+  (loop [attempt 1 max-retries 2 delay-ms 1]
     (let [result (send-payment-to-processor! processor-url processor-type correlation-id amount requested-at)]
       (if (or (= (:status result) 200)
               (= (:status result) 422)
               (> attempt max-retries))
         result
         (do
-          (println (str "Attempt " attempt " failed for " (name processor-type) ", retrying in " delay-ms "ms..."))
           (Thread/sleep delay-ms)
-          (recur (inc attempt) max-retries delay-ms))))))
+          (recur (inc attempt) max-retries (* delay-ms 2)))))))
 
 (defn ^:private process-payment-with-smart-routing!
   "Processes payment with smart routing based on health status"
@@ -111,25 +109,20 @@
     (cond
       (:active (redis/get-circuit-breaker-state))
       (do
-        (println "Circuit breaker allowing test request")
         (let [best-choice (logic/get-best-processor default-health
                                                     fallback-health
                                                     payment-processor-default-url
                                                     payment-processor-fallback-url)
-              test-result (retry-payment-processor! (:url best-choice)
+              test-result (send-payment-to-processor! (:url best-choice)
                                                       (:processor best-choice)
                                                       correlation-id
                                                       amount
-                                                      requested-at
-                                                      )]
+                                                      requested-at)]
           (if (= (:status test-result) 200)
             (do
-              (println "Test request successful - resetting circuit breaker")
               (redis/reset-circuit-breaker!)
               test-result)
-            (do
-              (println "Test request failed - keeping circuit breaker active")
-              {:status 503 :error "Service temporarily unavailable - test request failed"}))))
+            {:status 503 :error "Service temporarily unavailable"})))
 
       :else
       (let [best-choice (logic/get-best-processor default-health
@@ -172,22 +165,14 @@
     (process-payment-async! correlation-id amount requested-at result-chan)
     (async/alt!!
       result-chan ([result] result)
-      (async/timeout 8000) {:status 408 :error "Processing timeout"})))
-
-(defn ^:private execute-summary-query!
-  "Executes the summary query with proper error handling"
-  [query params]
-  (try
-    (if (empty? params)
-      (db/execute! query)
-      (apply db/execute! query params))
-    (catch Exception e
-      (println "Database error in summary query:" (.getMessage e))
-      [])))
+      (async/timeout 1400) {:status 408 :error "Processing timeout"})))
 
 (defn get-payments-summary
   "Gets payments summary with optional date filters"
   [from to]
-  (let [{:keys [query params]} (logic/build-summary-query from to)
-        results (execute-summary-query! query params)]
-    (logic/format-summary-results results)))
+  (try
+    (redis/get-payments-summary from to)
+    (catch Exception e
+      (println "Error getting payments summary:" (.getMessage e))
+      {:default {:totalRequests 0 :totalAmount 0.0}
+       :fallback {:totalRequests 0 :totalAmount 0.0}})))
