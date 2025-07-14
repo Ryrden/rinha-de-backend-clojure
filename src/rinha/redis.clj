@@ -96,17 +96,8 @@
       (let [cb-state (get-circuit-breaker-state)
           current-time (System/currentTimeMillis)
           time-since-activation (- current-time (:activated-at cb-state))
-          circuit-breaker-duration 5]
+          circuit-breaker-duration 3] ; 3ms
       (and (:active cb-state) (< time-since-activation circuit-breaker-duration))))
-
-(defn should-test-circuit-breaker?
-  "Checks if circuit breaker should allow a test request after the timeout"
-  []
-      (let [cb-state (get-circuit-breaker-state)
-          current-time (System/currentTimeMillis)
-          time-since-activation (- current-time (:activated-at cb-state))
-          circuit-breaker-duration 5]
-      (and (:active cb-state) (>= time-since-activation circuit-breaker-duration))))
 
 (defn reset-circuit-breaker!
   "Resets circuit breaker to inactive state"

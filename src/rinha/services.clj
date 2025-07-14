@@ -53,18 +53,10 @@
   (let [should-activate (redis/should-circuit-breaker-be-active? default-health fallback-health)
         is-active (redis/is-circuit-breaker-active?)]
     (cond
-      ; Both processors are failing and circuit breaker is not active -> activate it
       (and should-activate (not is-active))
-      (do
-        (println "Circuit breaker activated: both processors are failing")
-        (redis/set-circuit-breaker-state! true))
-      
-      ; At least one processor is healthy and circuit breaker is active -> deactivate it
+      (redis/set-circuit-breaker-state! true)
       (and (not should-activate) is-active)
-      (do
-        (println "Circuit breaker deactivated: at least one processor is healthy")
-        (redis/reset-circuit-breaker!)))
-    (println "Circuit breaker state after evaluation:" (redis/is-circuit-breaker-active?))))
+      (redis/reset-circuit-breaker!))))
 
 (defn ^:private send-payment-to-processor!
   "Sends payment to a specific processor"
@@ -77,8 +69,7 @@
       (let [response @(http/post url
                                  {:headers {"Content-Type" "application/json"}
                                   :body (m/encode m/instance "application/json" payload)
-                                  :timeout 350})]
-        (println "Response:" response)
+                                  :timeout 350})] 
         (case (:status response)
           200 (do
                 (db/execute!
@@ -94,38 +85,16 @@
         (check-both-processors!)
         {:status 500 :error (str "error: " (.getMessage e))}))))
 
-(defn ^:private retry-payment-processor!
-  "Retries payment processor with exponential backoff"
-  [processor-url processor-type correlation-id amount requested-at max-retries delay-ms]
-  (loop [attempt 1]
-    (let [result (send-payment-to-processor! processor-url processor-type correlation-id amount requested-at)]
-      (if (or (= (:status result) 200) 
-              (= (:status result) 422) 
-              (>= attempt max-retries))
-        result
-        (do
-          (println (str "Attempt " attempt " failed for " (name processor-type) ", retrying in " delay-ms "ms..."))
-          (Thread/sleep delay-ms)
-          (recur (inc attempt)))))))
-
 (defn ^:private process-payment-with-smart-routing!
   "Processes payment with smart routing based on health status"
   [correlation-id amount requested-at]
   (let [default-health (redis/get-processor-health :default)
         fallback-health (redis/get-processor-health :fallback)]
-    
-    ; Evaluate circuit breaker state
+
     (evaluate-circuit-breaker! default-health fallback-health)
-    
-    ; Check if circuit breaker is active
+
     (cond
-      (redis/is-circuit-breaker-active?)
-      (do
-        (println "Circuit breaker is active - rejecting request")
-        {:status 503 :error "Service temporarily unavailable - both processors are failing"})
-      
-      ; Circuit breaker allows test request
-      (redis/should-test-circuit-breaker?)
+      (:active (redis/get-circuit-breaker-state))
       (do
         (println "Circuit breaker allowing test request")
         (let [best-choice (logic/get-best-processor default-health
@@ -145,20 +114,17 @@
             (do
               (println "Test request failed - keeping circuit breaker active")
               {:status 503 :error "Service temporarily unavailable - test request failed"}))))
-      
-      ; Normal processing
+
       :else
       (let [best-choice (logic/get-best-processor default-health
                                                   fallback-health
                                                   payment-processor-default-url
                                                   payment-processor-fallback-url)
-            primary-result (retry-payment-processor! (:url best-choice)
-                                                     (:processor best-choice)
-                                                     correlation-id
-                                                     amount
-                                                     requested-at
-                                                     3
-                                                     10)]
+            primary-result (send-payment-to-processor! (:url best-choice)
+                                                       (:processor best-choice)
+                                                       correlation-id
+                                                       amount
+                                                       requested-at)]
         (condp = (:status primary-result)
           200 primary-result
           422 primary-result
