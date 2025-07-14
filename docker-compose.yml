@@ -28,6 +28,25 @@ services:
     networks:
       - backend
 
+  db: 
+    image: postgres:17-alpine
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+      - POSTGRES_DB=rinha_db
+    volumes:
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    deploy:
+      resources:
+        limits:
+          cpus: "5"
+          memory: "1gB"
+    networks:
+      - backend
+
   api-01:
     # image: ryrden/rinha-de-backend-clojure:latest
     build: .
@@ -35,6 +54,9 @@ services:
       - PORT=8080
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
+      - DATABASE_URL=jdbc:postgresql://db:5432/rinha_db
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=postgres
       - REDIS_URL=redis://redis:6379
     deploy:
       resources:
@@ -42,6 +64,7 @@ services:
           cpus: "5"
           memory: "1gB"
     depends_on:
+      - db
       - redis
     networks:
       - backend
@@ -54,6 +77,9 @@ services:
       - PORT=8081
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
+      - DATABASE_URL=jdbc:postgresql://db:5432/rinha_db
+      - DATABASE_USER=postgres
+      - DATABASE_PASSWORD=postgres
       - REDIS_URL=redis://redis:6379
     deploy:
       resources:
@@ -61,10 +87,14 @@ services:
           cpus: "5"
           memory: "1gB"
     depends_on:
+      - db
       - redis
     networks:
       - backend
       - payment-processor
+
+volumes:
+  db_data:
 
 networks:
   backend:
