@@ -22,8 +22,7 @@
   (try
     (let [health-key (processor-health-key processor-type)
           health-map (->> (redis-cmd (car/hgetall health-key))
-                          (apply hash-map))]
-      (println "Health map:" health-map)
+                          (apply hash-map))] 
       (if-not (empty? health-map)
         {:failing (= "true" (get health-map "failing"))
          :minResponseTime (Integer/parseInt (get health-map "minResponseTime" "0"))
@@ -96,7 +95,7 @@
       (let [cb-state (get-circuit-breaker-state)
           current-time (System/currentTimeMillis)
           time-since-activation (- current-time (:activated-at cb-state))
-          circuit-breaker-duration 3] ; 3ms
+          circuit-breaker-duration 10] 
       (and (:active cb-state) (< time-since-activation circuit-breaker-duration))))
 
 (defn reset-circuit-breaker!
