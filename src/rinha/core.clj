@@ -1,27 +1,33 @@
 (ns rinha.core
   (:require [rinha.routes :as routes]
             [rinha.redis :as redis]
-            [rinha.db :as db]
+            [rinha.redis-storage :as storage]
+            [rinha.workers :as workers]
             [org.httpkit.server :as server])
   (:gen-class))
 
-(defn start-server
-  "Starts the HTTP server with the ring application"
-  [port]
-  (let [app (routes/create-app)
-        server (server/run-server app {:port port :join? false})]
-    (println (str "Server started on port " port))
-    server))
+(defn start-system!
+  "Starts the complete system with HTTP server, workers, and monitoring"
+  [port num-workers]
+  (let [app (routes/create-app)]
+    (server/run-server app {:port port :join? false})
+    (workers/start-workers! num-workers)
+
+    (println (str "=== Rinha Payment System Started ==="))
+    (println (str "HTTP Server: localhost:" port))
+    (println (str "Workers: " num-workers " payment processing workers"))
+    (println (str "====================================="))))
 
 (defn -main
-  "Main entry point - starts the HTTP server"
+  "Main entry point - starts the complete payment system"
   []
-  (let [port (Integer/parseInt (System/getenv "PORT"))]
-    (if (db/ping)
-      (println "Database connection successful")
-      (println "Database connection failed"))
-    (if (redis/ping)
+  (let [port (Integer/parseInt (System/getenv "PORT"))
+        num-workers (Integer/parseInt (System/getenv "NUM_WORKERS"))]
+    (println "=== Rinha Payment System Initialization ===")
+    (when (redis/ping)
       (println "Redis connection successful")
-      (println "Redis connection failed"))
-    (start-server port)
-    (println "Press Ctrl+C to stop")))
+      (storage/initialize-summaries!)
+      (println "Redis storage initialized"))
+    (println "==========================================")
+    (println "Starting system...")
+    (start-system! port num-workers)))

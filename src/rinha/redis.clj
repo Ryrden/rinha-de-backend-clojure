@@ -6,84 +6,6 @@
 (defmacro redis-cmd [& body]
   `(car/wcar redis-conn ~@body))
 
-(defn processor-health-key
-  "Returns the Redis key for processor health"
-  [processor-type]
-  (str "processor-health:" (name processor-type)))
-
-(defn circuit-breaker-key
-  "Returns the Redis key for circuit breaker state"
-  []
-  "circuit-breaker:state")
-
-(defn get-processor-health
-  "Gets processor health from Redis"
-  [processor-type]
-  (try
-    (let [health-key (processor-health-key processor-type)
-          health-map (->> (redis-cmd (car/hgetall health-key))
-                          (apply hash-map))] 
-      (if-not (empty? health-map)
-        {:failing (= "true" (get health-map "failing"))
-         :minResponseTime (Integer/parseInt (get health-map "minResponseTime" "0"))
-         :last-check (Long/parseLong (get health-map "last-check" "0"))}
-        {:failing false :minResponseTime 0 :last-check 0}))
-    (catch Exception e
-      (println "Error reading health from Redis:" (.getMessage e) "full error:" e)
-      {:failing false :minResponseTime 0 :last-check 0})))
-
-(defn set-processor-health!
-  "Sets processor health in Redis"
-  [processor-type health-data]
-  (try
-    (let [health-key (processor-health-key processor-type)]
-      (redis-cmd
-       (car/hset health-key
-                 "failing" (str (:failing health-data))
-                 "minResponseTime" (str (:minResponseTime health-data))
-                 "last-check" (str (System/currentTimeMillis)))))
-    (catch Exception e
-      (println "Error writing health to Redis:" (.getMessage e)))))
-
-(defn get-circuit-breaker-state
-  "Gets circuit breaker state from Redis"
-  []
-  (try
-    (let [cb-key (circuit-breaker-key)
-          cb-map (->> (redis-cmd (car/hgetall cb-key))
-                      (apply hash-map))]
-      (if-not (empty? cb-map)
-        {:active (= "true" (get cb-map "active"))
-         :activated-at (Long/parseLong (get cb-map "activated-at" "0"))
-         :last-test (Long/parseLong (get cb-map "last-test" "0"))}
-        {:active false :activated-at 0 :last-test 0}))
-    (catch Exception e
-      (println "Error reading circuit breaker state from Redis:" (.getMessage e))
-      {:active false :activated-at 0 :last-test 0})))
-
-(defn set-circuit-breaker-state!
-  "Sets circuit breaker state in Redis"
-  [active]
-  (try
-    (let [cb-key (circuit-breaker-key)
-          current-time (System/currentTimeMillis)]
-      (redis-cmd
-       (car/hset cb-key
-                 "active" (str active)
-                 "activated-at" (str current-time)
-                 "last-test" (str current-time))))
-    (catch Exception e
-      (println "Error writing circuit breaker state to Redis:" (.getMessage e)))))
-
-(defn reset-circuit-breaker!
-  "Resets circuit breaker to inactive state"
-  []
-  (try
-    (let [cb-key (circuit-breaker-key)]
-      (redis-cmd (car/del cb-key)))
-    (catch Exception e
-      (println "Error resetting circuit breaker:" (.getMessage e)))))
-
 (defn ping
   "Pings Redis to check connectivity"
   []
@@ -91,4 +13,14 @@
     (redis-cmd (car/ping))
     (catch Exception e
       (println "Redis ping failed:" (.getMessage e))
-      false))) 
+      false)))
+
+(defn lpush!
+  "Pushes a value to the left of a Redis list"
+  [key value]
+  (redis-cmd (car/lpush key value)))
+
+(defn brpop!
+  "Blocking right pop from Redis list with timeout"
+  [key timeout-seconds]
+  (redis-cmd (car/brpop key timeout-seconds)))

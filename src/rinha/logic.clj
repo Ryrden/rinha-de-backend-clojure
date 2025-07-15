@@ -12,6 +12,60 @@
    (number? amount)
    (pos? amount)))
 
+(defn is-cached-processor-valid?
+  "Checks if cached processor is still valid (within 10 seconds)"
+  [cached-processor]
+  (when cached-processor
+    (let [current-time (System/currentTimeMillis)
+          decided-at (:decided-at cached-processor)]
+      (when decided-at
+        (let [time-since-decision (- current-time decided-at)]
+          (< time-since-decision 5000)))))) ; 5 seconds = 5000ms
+
+(defn should-use-cached-processor?
+  "Determines if cached processor should be used"
+  [cached-processor]
+  (and cached-processor
+       (is-cached-processor-valid? cached-processor)))
+
+(defn should-invalidate-cache-on-failure?
+  "Determines if cache should be invalidated when current processor fails"
+  [failed-processor cached-processor]
+  (and cached-processor
+       (= failed-processor (:processor cached-processor))))
+
+(defn both-processors-failing?
+  "Checks if both processors are failing"
+  [default-health fallback-health]
+  (and (:failing default-health) (:failing fallback-health)))
+
+(defn is-circuit-breaker-active?
+  "Checks if circuit breaker is currently active (within 3 seconds)"
+  [circuit-breaker-state]
+  (when circuit-breaker-state
+    (let [current-time (System/currentTimeMillis)
+          activated-at (:activated-at circuit-breaker-state)
+          time-since-activation (- current-time activated-at)]
+      (and (:active circuit-breaker-state)
+           (< time-since-activation 3000))))) ; 3 seconds = 3000ms
+
+(defn should-activate-circuit-breaker?
+  "Determines if circuit breaker should be activated"
+  [default-health fallback-health circuit-breaker-state]
+  (and (both-processors-failing? default-health fallback-health)
+       (not (is-circuit-breaker-active? circuit-breaker-state))))
+
+(defn should-make-test-request?
+  "Determines if test request should be made during circuit breaker"
+  [circuit-breaker-state]
+  (is-circuit-breaker-active? circuit-breaker-state))
+
+(defn get-test-request-order
+  "Returns processors in order for testing (default first, then fallback)"
+  [default-url fallback-url]
+  [{:processor :default :url default-url}
+   {:processor :fallback :url fallback-url}])
+
 (defn should-retry-payment?
   "Determines if a payment should be retried based on status and attempt count"
   [http-status attempt max-attempts]
@@ -24,17 +78,6 @@
   (if (= primary-processor :default)
     {:processor :fallback :url fallback-url}
     {:processor :default :url default-url}))
-
-(defn parse-payment-response
-  "Parses payment processor response into standardized format"
-  [response processor-type]
-  (let [status (:status response)]
-    (cond
-      (= status 200) {:status 200 :processor processor-type}
-      (= status 422) {:status 422 :error "Payment already exists"} 
-      (= status 500) {:status 500 :error "Processor failed"}
-      (nil? status) {:status nil :error "Request timeout"}
-      :else {:status status :error (str "HTTP error: " status)})))
 
 (defn should-try-fallback?
   "Determines if fallback processor should be tried based on primary result"
@@ -122,6 +165,17 @@
                  {:processor :default :url default-url}
                  {:processor :fallback :url fallback-url})]
     choice))
+
+(defn get-processor-choice-with-cache
+  "Gets processor choice, using cache if valid, otherwise evaluating fresh"
+  [cached-processor default-health fallback-health default-url fallback-url]
+  (if (should-use-cached-processor? cached-processor)
+    {:choice cached-processor
+     :from-cache true
+     :reason (:reason cached-processor)}
+    {:choice (get-best-processor default-health fallback-health default-url fallback-url)
+     :from-cache false
+     :reason "fresh-evaluation"}))
 
 (defn build-summary-query
   "Builds the SQL query for payments summary with optional date filters"

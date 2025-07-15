@@ -22,6 +22,8 @@ services:
     image: redis:7-alpine
     ports:
       - "6379:6379"
+    volumes:
+      - redis_data:/data
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
@@ -31,43 +33,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.2"
-          memory: "10mb"
-    networks:
-      - backend
-
-  db: 
-    image: postgres:17-alpine
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=rinha_db
-    command: >
-      postgres
-      -c shared_buffers=8MB
-      -c max_connections=20
-      -c work_mem=1MB
-      -c maintenance_work_mem=4MB
-      -c effective_cache_size=16MB
-      -c checkpoint_completion_target=0.9
-      -c wal_buffers=1MB
-      -c default_statistics_target=10
-    volumes:
-      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - db_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d rinha_db"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 40s
-    deploy:
-      resources:
-        limits:
-          cpus: "0.2"
-          memory: "30mb"
+          cpus: "0.15"
+          memory: "16mb"
     networks:
       - backend
 
@@ -76,17 +43,15 @@ services:
     build: .
     environment:
       - PORT=8080
+      - NUM_WORKERS=3
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
-      - DATABASE_URL=jdbc:postgresql://db:5432/rinha_db
-      - DATABASE_USER=postgres
-      - DATABASE_PASSWORD=postgres
       - REDIS_URL=redis://redis:6379
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: "150mb"
+          cpus: "0.625"
+          memory: "162mb"
     ports:
       - "8080:8080"
     healthcheck:
@@ -95,8 +60,6 @@ services:
       timeout: 5s
       retries: 10
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -108,17 +71,15 @@ services:
     build: .
     environment:
       - PORT=8081
+      - NUM_WORKERS=3
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
-      - DATABASE_URL=jdbc:postgresql://db:5432/rinha_db
-      - DATABASE_USER=postgres
-      - DATABASE_PASSWORD=postgres
       - REDIS_URL=redis://redis:6379
     deploy:
       resources:
         limits:
-          cpus: "0.5"
-          memory: "150mb"
+          cpus: "0.625"
+          memory: "162mb"
     ports:
       - "8081:8081"
     healthcheck:
@@ -127,8 +88,6 @@ services:
       timeout: 5s
       retries: 10
     depends_on:
-      db:
-        condition: service_healthy
       redis:
         condition: service_healthy
     networks:
@@ -136,7 +95,7 @@ services:
       - payment-processor
 
 volumes:
-  db_data:
+  redis_data:
 
 networks:
   backend:
