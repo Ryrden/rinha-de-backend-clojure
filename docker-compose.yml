@@ -76,6 +76,7 @@ services:
     build: .
     environment:
       - PORT=8080
+      - NUM_WORKERS=3
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
       - DATABASE_URL=jdbc:postgresql://db:5432/rinha_db
@@ -108,6 +109,7 @@ services:
     build: .
     environment:
       - PORT=8081
+      - NUM_WORKERS=3
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
       - DATABASE_URL=jdbc:postgresql://db:5432/rinha_db
