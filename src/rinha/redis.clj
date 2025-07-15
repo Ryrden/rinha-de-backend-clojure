@@ -45,15 +45,6 @@
     (catch Exception e
       (println "Error writing health to Redis:" (.getMessage e)))))
 
-(defn should-check-health?
-  "Checks if enough time has passed since last health check"
-  [processor-type]
-  (let [current-time (System/currentTimeMillis)
-        health-data (get-processor-health processor-type)
-        last-check (:last-check health-data)
-        time-since-last-check (- current-time last-check)]
-    (>= time-since-last-check 5100)))
-
 (defn get-circuit-breaker-state
   "Gets circuit breaker state from Redis"
   []
@@ -83,20 +74,6 @@
                  "last-test" (str current-time))))
     (catch Exception e
       (println "Error writing circuit breaker state to Redis:" (.getMessage e)))))
-
-(defn should-circuit-breaker-be-active?
-  "Checks if circuit breaker should be active based on both processors health"
-  [default-health fallback-health]
-  (and (:failing default-health) (:failing fallback-health)))
-
-(defn is-circuit-breaker-active?
-  "Checks if circuit breaker is currently active and should block requests"
-  []
-      (let [cb-state (get-circuit-breaker-state)
-          current-time (System/currentTimeMillis)
-          time-since-activation (- current-time (:activated-at cb-state))
-          circuit-breaker-duration 500] 
-      (and (:active cb-state) (< time-since-activation circuit-breaker-duration))))
 
 (defn reset-circuit-breaker!
   "Resets circuit breaker to inactive state"

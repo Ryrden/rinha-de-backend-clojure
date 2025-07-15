@@ -91,9 +91,9 @@ services:
       - "8080:8080"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8080/"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+      interval: 10s
+      timeout: 5s
+      retries: 10
     depends_on:
       db:
         condition: service_healthy
@@ -123,9 +123,9 @@ services:
       - "8081:8081"
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8081/"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
+      interval: 10s
+      timeout: 5s
+      retries: 10
     depends_on:
       db:
         condition: service_healthy
