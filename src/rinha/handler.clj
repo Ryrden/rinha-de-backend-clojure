@@ -20,8 +20,7 @@
 
       (:success result)
       {:status 202
-       :body {:message "Payment processed successfully"
-              :processor (name (:processor result))}}
+       :body {:message "Payment processed successfully"}}
 
       :else
       {:status 500

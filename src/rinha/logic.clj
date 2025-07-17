@@ -17,9 +17,10 @@
   [cached-processor]
   (when cached-processor
     (let [current-time (System/currentTimeMillis)
-          decided-at (:decided-at cached-processor)
-          time-since-decision (- current-time decided-at)]
-      (< time-since-decision 5000)))) ; 5 seconds = 5000ms
+          decided-at (:decided-at cached-processor)]
+      (when decided-at
+        (let [time-since-decision (- current-time decided-at)]
+          (< time-since-decision 5000)))))) ; 5 seconds = 5000ms
 
 (defn should-use-cached-processor?
   "Determines if cached processor should be used"
@@ -77,17 +78,6 @@
   (if (= primary-processor :default)
     {:processor :fallback :url fallback-url}
     {:processor :default :url default-url}))
-
-(defn parse-payment-response
-  "Parses payment processor response into standardized format"
-  [response processor-type]
-  (let [status (:status response)]
-    (cond
-      (= status 200) {:status 200 :processor processor-type}
-      (= status 422) {:status 422 :error "Payment already exists"} 
-      (= status 500) {:status 500 :error "Processor failed"}
-      (nil? status) {:status nil :error "Request timeout"}
-      :else {:status status :error (str "HTTP error: " status)})))
 
 (defn should-try-fallback?
   "Determines if fallback processor should be tried based on primary result"
@@ -183,10 +173,9 @@
     {:choice cached-processor
      :from-cache true
      :reason (:reason cached-processor)}
-    (let [fresh-choice (get-best-processor default-health fallback-health default-url fallback-url)]
-      {:choice fresh-choice
-       :from-cache false
-       :reason "fresh-evaluation"})))
+    {:choice (get-best-processor default-health fallback-health default-url fallback-url)
+     :from-cache false
+     :reason "fresh-evaluation"}))
 
 (defn build-summary-query
   "Builds the SQL query for payments summary with optional date filters"

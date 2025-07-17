@@ -1,23 +1,4 @@
 services:
-  db: 
-    image: postgres:17-alpine
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-      - POSTGRES_DB=rinha
-    volumes:
-      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
-      - db_data:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-    deploy:
-      resources:
-        limits:
-          cpus: "0.3"
-          memory: "62MB"
-    networks:
-      - backend
-
   nginx:
     image: nginx:alpine
     ports:
@@ -61,21 +42,13 @@ services:
       - POSTGRES_USER=postgres
       - POSTGRES_PASSWORD=postgres
       - POSTGRES_DB=rinha_db
-    command: >
-      postgres
-      -c shared_buffers=8MB
-      -c max_connections=20
-      -c work_mem=1MB
-      -c maintenance_work_mem=4MB
-      -c effective_cache_size=16MB
-      -c checkpoint_completion_target=0.9
-      -c wal_buffers=1MB
-      -c default_statistics_target=10
     volumes:
-      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./scripts/postgres/init.sql:/docker-entrypoint-initdb.d/init.sql
+      - ./scripts/postgres/postgresql.conf:/etc/postgresql/postgresql.conf:ro
       - db_data:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    command: postgres -c config_file=/etc/postgresql/postgresql.conf
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U postgres -d rinha_db"]
       interval: 30s
@@ -95,7 +68,7 @@ services:
     build: .
     environment:
       - PORT=8080
-      - NUM_WORKERS=3
+      - NUM_WORKERS=2
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
       - DATABASE_URL=jdbc:postgresql://db:5432/rinha_db
@@ -128,7 +101,7 @@ services:
     build: .
     environment:
       - PORT=8081
-      - NUM_WORKERS=3
+      - NUM_WORKERS=2
       - PROCESSOR_DEFAULT_URL=http://payment-processor-default:8080
       - PROCESSOR_FALLBACK_URL=http://payment-processor-fallback:8080
       - DATABASE_URL=jdbc:postgresql://db:5432/rinha_db
