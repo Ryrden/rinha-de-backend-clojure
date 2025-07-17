@@ -1,5 +1,5 @@
 (ns rinha.services
-  (:require [rinha.db :as db]
+  (:require [rinha.redis-storage :as storage]
             [rinha.logic :as logic]
             [rinha.queue :as queue])
   (:import [java.time Instant]))
@@ -21,20 +21,12 @@
         {:success true}
         {:success false :error "Failed to enqueue payment"}))))
 
-(defn ^:private execute-summary-query!
-  "Executes the summary query with proper error handling"
-  [query params]
-  (try
-    (if (empty? params)
-      (db/execute! query) ; TODO: Check if with apply has same effect
-      (apply db/execute! query params))
-    (catch Exception e
-      (println "Database error in summary query:" (.getMessage e))
-      [])))
-
 (defn get-payments-summary
-  "Gets payments summary with optional date filters"
+  "Gets payments summary with optional date filters from Redis"
   [from to]
-  (let [{:keys [query params]} (logic/build-summary-query from to)
-        results (execute-summary-query! query params)]
-    (logic/format-summary-results results)))
+  (try
+    (storage/get-payments-summary from to)
+    (catch Exception e
+      (println "Redis error in summary query:" (.getMessage e))
+      {:default {:totalRequests 0 :totalAmount 0.0}
+       :fallback {:totalRequests 0 :totalAmount 0.0}})))

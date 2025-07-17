@@ -1,7 +1,7 @@
 (ns rinha.workers
   (:require [clojure.core.async :as async]
             [org.httpkit.client :as http]
-            [rinha.db :as db]
+            [rinha.redis-storage :as storage]
             [rinha.queue :as queue]
             [muuntaja.core :as m])
   (:import [java.time Instant]))
@@ -10,16 +10,16 @@
 (def ^:private payment-processor-fallback-url (System/getenv "PROCESSOR_FALLBACK_URL"))
 (def ^:private worker-timeout 5) ; seconds to wait for messages
 
-(defn ^:private save-payment-to-db!
-  "Saves payment to database"
+(defn ^:private save-payment-to-redis!
+  "Saves payment to Redis"
   [correlation-id amount requested-at processor]
   (try
-    (db/execute!
-     "INSERT INTO payments (correlation_id, amount, requested_at, processor) VALUES (?::uuid, ?, ?::timestamp, ?)"
-     correlation-id amount requested-at (name processor))
-    (println "Payment saved to database:" correlation-id amount requested-at (name processor))
+    (let [result (storage/save-payment! correlation-id amount requested-at processor)]
+      (if (:success result)
+        (println "Payment saved to Redis:" correlation-id amount requested-at (name processor))
+        (println "Payment already exists in Redis:" correlation-id)))
     (catch Exception e
-      (println "Database save failed:" (.getMessage e)))))
+      (println "Redis save failed:" (.getMessage e)))))
 
 (defn ^:private send-payment-to-processor!
   "Sends payment to a specific processor"
@@ -35,7 +35,7 @@
         (condp = status
           200 (do
                 (println "Payment processed by" processor "with status" status)
-                (save-payment-to-db! correlation-id amount (str (Instant/now)) processor)
+                (save-payment-to-redis! correlation-id amount (str (Instant/now)) processor)
                 {:status 200 :message "Payment processed"})
           422 {:status 422 :message "Payment already exists"}
           500 {:status 500 :message "Processor failed"}

@@ -15,7 +15,6 @@
       (println "Redis ping failed:" (.getMessage e))
       false)))
 
-;; Queue operations for payment processing
 (defn lpush!
   "Pushes a value to the left of a Redis list"
   [key value]

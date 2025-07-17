@@ -1,7 +1,7 @@
 (ns rinha.core
   (:require [rinha.routes :as routes]
             [rinha.redis :as redis]
-            [rinha.db :as db]
+            [rinha.redis-storage :as storage]
             [rinha.workers :as workers]
             [org.httpkit.server :as server])
   (:gen-class))
@@ -24,10 +24,10 @@
   (let [port (Integer/parseInt (System/getenv "PORT"))
         num-workers (Integer/parseInt (System/getenv "NUM_WORKERS"))]
     (println "=== Rinha Payment System Initialization ===")
-    (when (db/ping)
-      (println "Database connection successful"))
     (when (redis/ping)
-      (println "Redis connection successful"))
+      (println "Redis connection successful")
+      (storage/initialize-summaries!)
+      (println "Redis storage initialized"))
     (println "==========================================")
     (println "Starting system...")
     (start-system! port num-workers)))
