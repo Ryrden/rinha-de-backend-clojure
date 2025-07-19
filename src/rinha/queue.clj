@@ -24,7 +24,6 @@
   [timeout-seconds]
   (try
     (let [result (redis/brpop! queue-name timeout-seconds)]
-      (println "Dequeued payment:" result)
       (when result
         (let [message-str (second result)]
           (utils/deserialize-message message-str))))

@@ -8,15 +8,14 @@
 
 (def ^:private payment-processor-default-url (System/getenv "PROCESSOR_DEFAULT_URL"))
 (def ^:private payment-processor-fallback-url (System/getenv "PROCESSOR_FALLBACK_URL"))
-(def ^:private worker-timeout 5) ; seconds to wait for messages
+(def ^:private worker-timeout 5)
 
 (defn ^:private save-payment-to-redis!
   "Saves payment to Redis"
   [correlation-id amount requested-at processor]
   (try
     (let [result (storage/save-payment! correlation-id amount requested-at processor)]
-      (if (:success result)
-        (println "Payment saved to Redis:" correlation-id amount requested-at (name processor))
+      (when-not (:success result)
         (println "Payment already exists in Redis:" correlation-id)))
     (catch Exception e
       (println "Redis save failed:" (.getMessage e)))))
@@ -34,7 +33,6 @@
                                           :timeout timeout})]
         (condp = status
           200 (do
-                (println "Payment processed by" processor "with status" status)
                 (save-payment-to-redis! correlation-id amount (str (Instant/now)) processor)
                 {:status 200 :message "Payment processed"})
           422 {:status 422 :message "Payment already exists"}
