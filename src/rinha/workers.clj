@@ -40,7 +40,6 @@
           nil {:status nil :message "Request timeout"}
           {:status status :message (str "HTTP error: " status)}))
       (catch Exception e
-        (println "HTTP request failed:" (.getMessage e))
         {:status 500 :message (.getMessage e)}))))
 
 (defn ^:private process-payment-message!

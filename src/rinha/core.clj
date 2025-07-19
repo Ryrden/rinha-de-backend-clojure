@@ -25,9 +25,7 @@
         num-workers (Integer/parseInt (System/getenv "NUM_WORKERS"))]
     (println "=== Rinha Payment System Initialization ===")
     (when (redis/ping)
-      (println "Redis connection successful")
-      (storage/initialize-summaries!)
-      (println "Redis storage initialized"))
+      (println "Redis connection successful"))
     (println "==========================================")
     (println "Starting system...")
     (start-system! port num-workers)))
