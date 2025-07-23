@@ -6,8 +6,8 @@
             [muuntaja.core :as m])
   (:import [java.time Instant]))
 
-(def ^:private health-cache-ttl 5) ; 5 seconds TTL for health check cooldown
-(def ^:private health-check-timeout 3000) ; 3 seconds timeout for health checks
+(def ^:private health-cache-ttl 5)
+(def ^:private health-check-timeout 3000)
 
 (defn ^:private get-health-cache-key
   "Gets the Redis cache key for processor health"
@@ -90,11 +90,11 @@
       (let [last-check-time (redis/redis-cmd (car/get last-check-key))]
         (if last-check-time
           (let [time-since-check (- (System/currentTimeMillis) (Long/parseLong last-check-time))]
-            (> time-since-check (* health-cache-ttl 1000))) ; Convert TTL to milliseconds
-          true)) ; No previous check, so we should check
+            (> time-since-check (* health-cache-ttl 1000)))
+          true))
       (catch Exception e
         (println "Failed to check health cooldown for" processor ":" (.getMessage e))
-        true)))) ; On error, allow the check
+        true))))
 
 (defn check-processor-health!
   "Checks and caches processor health status with cooldown logic"
@@ -130,14 +130,12 @@
         default-has-data (> (:checked-at default-health) 0)
         fallback-has-data (> (:checked-at fallback-health) 0)]
     
-    ;; Check if both processors are failing and activate circuit breaker
     (when (and default-has-data fallback-has-data
                (:failing default-health) (:failing fallback-health))
       (println "Both processors showing failing status - activating circuit breaker")
       (cb/activate-circuit-breaker!))
     
     (cond
-      ;; Both processors have health data and are healthy
       (and (:healthy default-health) (:healthy fallback-health)
            default-has-data fallback-has-data)
       (do
@@ -146,25 +144,21 @@
           :default
           :fallback))
       
-      ;; Only default healthy and has data
       (and (:healthy default-health) default-has-data)
       (do
         (println "Only default processor is healthy")
         :default)
       
-      ;; Only fallback healthy and has data
       (and (:healthy fallback-health) fallback-has-data)
       (do  
         (println "Only fallback processor is healthy")
         :fallback)
       
-      ;; No health data available yet - prefer default (it's cheaper)
       (and (not default-has-data) (not fallback-has-data))
       (do
         (println "No health data available yet - defaulting to default processor")
         :default)
       
-      ;; Default case - prefer default (it's cheaper)
       :else 
       (do
         (println "Health status unclear - defaulting to default processor")

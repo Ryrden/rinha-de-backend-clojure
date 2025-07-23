@@ -4,7 +4,7 @@
   (:import [java.time Instant]))
 
 (def ^:private circuit-breaker-key "circuit-breaker:status")
-(def ^:private circuit-breaker-ttl 5) ; 5 seconds TTL when circuit is open
+(def ^:private circuit-breaker-ttl 5)
 
 (defn ^:private current-timestamp
   "Gets current timestamp in milliseconds"
@@ -32,13 +32,15 @@
               time-elapsed (- (current-timestamp) breaker-time)]
           (if (< time-elapsed (* circuit-breaker-ttl 1000))
             (do
-                             (println "Circuit breaker is OPEN - Time remaining:" 
+              (println "Circuit breaker is OPEN - Time remaining:" 
                        (- (* circuit-breaker-ttl 1000) time-elapsed) "ms")
               true)
-            false))
+            (do
+              (println "Circuit breaker timeout expired, closing circuit breaker")
+              false)))
         false))
     (catch Exception e
-      (println "Circuit breaker check failed:" (.getMessage e))
+      (println "Circuit breaker check failed, assuming closed:" (.getMessage e))
       false)))
 
 (defn activate-circuit-breaker!
