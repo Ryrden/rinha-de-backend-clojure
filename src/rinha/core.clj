@@ -1,7 +1,5 @@
 (ns rinha.core
   (:require [rinha.routes :as routes]
-            [rinha.redis :as redis]
-            [rinha.redis-storage :as storage]
             [rinha.workers :as workers]
             [org.httpkit.server :as server])
   (:gen-class))
@@ -22,10 +20,6 @@
   "Main entry point - starts the complete payment system"
   []
   (let [port (Integer/parseInt (System/getenv "PORT"))
-        num-workers (Integer/parseInt (System/getenv "NUM_WORKERS"))]
-    (println "=== Rinha Payment System Initialization ===")
-    (when (redis/ping)
-      (println "Redis connection successful"))
-    (println "==========================================")
+        num-workers (Integer/parseInt (System/getenv "NUM_WORKERS"))] 
     (println "Starting system...")
     (start-system! port num-workers)))

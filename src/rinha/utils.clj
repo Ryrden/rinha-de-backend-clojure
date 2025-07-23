@@ -15,20 +15,16 @@
   "Serializes a message to JSON string"
   [message]
   (try
-    (let [encoded (m/encode m/instance "application/json" message)]
-      (if (string? encoded)
-        encoded
-        (slurp encoded)))
+    (slurp (m/encode m/instance "application/json" message))
     (catch Exception e
       (println "Failed to serialize message:" (.getMessage e))
       (throw e))))
 
 (defn deserialize-message
   "Deserializes a message from JSON string"
-  [message-str]
-  (try
-    (when (and message-str (not (empty? message-str)))
-      (m/decode m/instance "application/json" message-str))
+  [message]
+  (try 
+    (m/decode m/instance "application/json" message)
     (catch Exception e
       (println "Failed to deserialize message:" (.getMessage e))
       nil)))

@@ -1,5 +1,5 @@
 (ns rinha.services
-  (:require [rinha.redis-storage :as storage]
+  (:require [rinha.redis-db :as storage]
             [rinha.logic :as logic]
             [rinha.queue :as queue])
   (:import [java.time Instant]))

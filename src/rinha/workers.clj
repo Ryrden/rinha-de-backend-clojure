@@ -1,7 +1,7 @@
 (ns rinha.workers
   (:require [clojure.core.async :as async]
             [org.httpkit.client :as http]
-            [rinha.redis-storage :as storage]
+            [rinha.redis-db :as storage]
             [rinha.queue :as queue]
             [muuntaja.core :as m])
   (:import [java.time Instant]))
@@ -65,7 +65,7 @@
   (println "Worker" worker-id "started")
   (async/go
     (loop []
-      (let [dequeue-chan (async/thread (queue/dequeue-payment! worker-timeout))]
+      (let [dequeue-chan (async/thread (queue/dequeue-payment!))]
         (async/alt!
           stop-chan
           (do
@@ -76,8 +76,11 @@
           ([message]
            (when message
              (async/thread
-               (let [result (process-payment-message! message)]
-                 (println "Worker" worker-id "processed payment:" result))))
+               (let [{:keys [status]} (process-payment-message! (dissoc message :original_serialized_message))]
+                 (when (not= status 200)
+                   (queue/enqueue-failed-payment! (dissoc message :original_serialized_message)))
+                 (queue/mark-payment-as-completed! message)
+                 (println "Worker" worker-id "processed payment:" status))))
            (recur)))))))
 
 (defn start-worker!
