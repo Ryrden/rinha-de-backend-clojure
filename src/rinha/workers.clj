@@ -3,12 +3,16 @@
             [org.httpkit.client :as http]
             [rinha.redis-db :as storage]
             [rinha.queue :as queue]
+            [rinha.health :as health]
+            [rinha.circuit-breaker :as cb]
             [muuntaja.core :as m])
   (:import [java.time Instant]))
 
 (def ^:private payment-processor-default-url (System/getenv "PROCESSOR_DEFAULT_URL"))
 (def ^:private payment-processor-fallback-url (System/getenv "PROCESSOR_FALLBACK_URL"))
 (def ^:private worker-timeout 5)
+(def ^:private max-retries 3)
+(def ^:private retry-delay-ms 3000)
 
 (defn ^:private save-payment-to-redis!
   "Saves payment to Redis"
@@ -42,22 +46,100 @@
       (catch Exception e
         {:status 500 :message (.getMessage e)}))))
 
-(defn ^:private process-payment-message!
-  "Processes a single payment message from the queue"
+(defn ^:private should-retry?
+  "Determines if a payment should be retried based on status and retry count"
+  [status retry-count]
+  (and (< retry-count max-retries)
+       (or (= status 500) (nil? status))))
+
+(defn ^:private get-processor-url
+  "Gets the URL for a processor"
+  [processor]
+  (condp = processor
+    :default payment-processor-default-url
+    :fallback payment-processor-fallback-url
+    payment-processor-default-url))
+
+(defn ^:private process-payment-with-retries!
+  "Processes a single payment message with retry logic and health monitoring"
   [message]
-  (let [{:keys [correlation-id amount]} message
-        {:keys [status message]} (send-payment-to-processor! payment-processor-default-url
-                                                             :default
-                                                             correlation-id
-                                                             amount
-                                                             150)]
-    (when (or (= status 500) (nil? status))
-      (send-payment-to-processor! payment-processor-fallback-url
-                                  :fallback
-                                  correlation-id
-                                  amount
-                                  150))
-    {:status status :message message}))
+  (let [{:keys [correlation-id amount retry-count]} message
+        current-retry-count (or retry-count 0)]
+    
+    ;; Check circuit breaker first
+    (if (cb/circuit-open?)
+      (do
+        (println "Payment rejected - Circuit breaker is OPEN")
+        {:status :circuit-open 
+         :message "Circuit breaker active - system protection engaged"})
+      
+      ;; Circuit breaker is closed, proceed normally
+      (let [best-processor (health/get-best-processor)]
+        
+        (println "Processing payment with best processor:" best-processor)
+        
+        ;; Try the best processor first
+        (let [primary-url (get-processor-url best-processor)
+              primary-result (send-payment-to-processor! primary-url
+                                                         best-processor
+                                                         correlation-id
+                                                         amount
+                                                         5000)]
+          (if (= (:status primary-result) 200)
+            primary-result
+            
+            ;; Primary processor failed - trigger health check and try fallback
+            (do
+              (println "Primary processor" best-processor "failed, checking health and trying fallback")
+              
+              ;; Trigger health check for the failed processor
+              (async/go (health/check-processor-health! primary-url best-processor))
+              
+              ;; Try the other processor
+              (let [fallback-processor (if (= best-processor :default) :fallback :default)
+                    fallback-url (get-processor-url fallback-processor)
+                    fallback-result (send-payment-to-processor! fallback-url
+                                                                fallback-processor
+                                                                correlation-id
+                                                                amount
+                                                                5000)]
+                
+                ;; If fallback also failed, check its health too
+                (when (not= (:status fallback-result) 200)
+                  (async/go (health/check-processor-health! fallback-url fallback-processor)))
+                
+                (if (= (:status fallback-result) 200)
+                  fallback-result
+                  
+                  ;; Both processors failed - consider circuit breaker activation
+                  (do
+                    (println "Both processors failed - evaluating circuit breaker activation")
+                    
+                    ;; Activate circuit breaker when both processors fail
+                    (cb/activate-circuit-breaker!)
+                    
+                    ;; Check if we should retry
+                    (if (should-retry? (:status fallback-result) current-retry-count)
+                      {:status :retry 
+                       :message "Will retry after delay (both processors failed)"
+                       :retry-count (inc current-retry-count)}
+                      
+                      ;; Max retries reached - final failure
+                      {:status (:status fallback-result) 
+                       :message (:message fallback-result)
+                       :final-failure true})))))))))))
+
+(defn ^:private handle-retry-payment!
+  "Handles a payment that needs to be retried"
+  [message worker-id]
+  (println "Worker" worker-id "scheduling retry for payment. Retry count:" (:retry-count message))
+  
+  ;; Wait 3 seconds before re-enqueuing
+  (async/go
+    (async/<! (async/timeout retry-delay-ms))
+    (let [retry-message (assoc message :retry-count (:retry-count message))]
+      (queue/enqueue-payment! (:correlation-id retry-message) (:amount retry-message) (:retry-count retry-message))
+      (println "Worker" worker-id "re-enqueued payment after delay. Retry count:" (:retry-count retry-message)))))
 
 (defn ^:private worker-loop!
   "Main worker loop that processes messages from the queue"
@@ -76,11 +158,35 @@
           ([message]
            (when message
              (async/thread
-               (let [{:keys [status]} (process-payment-message! (dissoc message :original_serialized_message))]
-                 (when (not= status 200)
-                   (queue/enqueue-failed-payment! (dissoc message :original_serialized_message)))
-                 (queue/mark-payment-as-completed! message)
-                 (println "Worker" worker-id "processed payment:" status))))
+               (let [result (process-payment-with-retries! (dissoc message :original_serialized_message))]
+                 (condp = (:status result)
+                   200
+                   (do
+                     (queue/mark-payment-as-completed! message)
+                     (println "Worker" worker-id "processed payment successfully: 200"))
+                   
+                   :circuit-open
+                   (do
+                     ;; Circuit breaker is open - re-enqueue after short delay
+                     (async/go
+                       (async/<! (async/timeout 1000)) ; 1 second delay
+                       (queue/enqueue-payment! (get (dissoc message :original_serialized_message) :correlation-id)
+                                               (get (dissoc message :original_serialized_message) :amount)
+                                               (or (get (dissoc message :original_serialized_message) :retry-count) 0)))
+                     (queue/mark-payment-as-completed! message)
+                     (println "Worker" worker-id "payment re-queued due to circuit breaker"))
+                   
+                   :retry
+                   (do
+                     (handle-retry-payment! (merge (dissoc message :original_serialized_message) 
+                                                   {:retry-count (:retry-count result)}) worker-id)
+                     (queue/mark-payment-as-completed! message))
+                   
+                   ;; Default case - final failure
+                   (do
+                     (queue/enqueue-failed-payment! (dissoc message :original_serialized_message))
+                     (queue/mark-payment-as-completed! message)
+                     (println "Worker" worker-id "payment failed permanently after retries:" (:status result)))))))
            (recur)))))))
 
 (defn start-worker!

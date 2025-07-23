@@ -9,17 +9,20 @@
 
 (defn enqueue-payment!
   "Enqueues a payment for processing"
-  [correlation-id amount]
-  (let [message {:correlation-id correlation-id
-                 :amount amount
-                 :created-at (System/currentTimeMillis)}
-        serialized-message (utils/serialize-message message)]
-    (try
-      (redis/redis-cmd (car/lpush queue-name serialized-message))
-      {:success true :correlation-id correlation-id}
-      (catch Exception e
-        (println "Failed to enqueue payment:" (.getMessage e))
-        {:success false :error (.getMessage e)}))))
+  ([correlation-id amount]
+   (enqueue-payment! correlation-id amount 0))
+  ([correlation-id amount retry-count]
+   (let [message {:correlation-id correlation-id
+                  :amount amount
+                  :retry-count retry-count
+                  :created-at (System/currentTimeMillis)}
+         serialized-message (utils/serialize-message message)]
+     (try
+       (redis/redis-cmd (car/lpush queue-name serialized-message))
+       {:success true :correlation-id correlation-id}
+       (catch Exception e
+         (println "Failed to enqueue payment:" (.getMessage e))
+         {:success false :error (.getMessage e)})))))
 
 (defn dequeue-payment!
   "Dequeues a payment for processing"

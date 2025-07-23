@@ -18,6 +18,15 @@
        :body {:error "Invalid payment data"
               :message "correlationId must be a valid UUID and amount must be a positive number"}}
 
+      ;; Circuit breaker is active
+      (and (not (:success result)) (:circuit-breaker result))
+      {:status 503  ; Service Unavailable
+       :headers {"Retry-After" (str (Math/ceil (/ (:retry-after-ms result) 1000.0)))}
+       :body {:error (:error result)
+              :message (:reason result)
+              :circuit-breaker true
+              :retry-after-seconds (Math/ceil (/ (:retry-after-ms result) 1000.0))}}
+
       (:success result)
       {:status 202
        :body {:message "Payment processed successfully"}}
