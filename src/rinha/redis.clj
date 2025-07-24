@@ -56,8 +56,7 @@
   ([correlation-id amount retry-count]
    (let [message {:correlation-id correlation-id
                   :amount amount
-                  :retry-count retry-count
-                  :created-at (System/currentTimeMillis)}
+                  :retry-count retry-count}
          serialized-message (utils/serialize-message message)]
      (try
        (redis-cmd (car/lpush queue-name serialized-message))

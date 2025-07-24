@@ -196,37 +196,24 @@
         fallback-health (get-processor-health-status :fallback)
         default-has-data (> (:checked-at default-health) 0)
         fallback-has-data (> (:checked-at fallback-health) 0)]
-    
+
     (when (and default-has-data fallback-has-data
                (:failing default-health) (:failing fallback-health))
       (println "Both processors showing failing status - activating circuit breaker")
       (activate-circuit-breaker!))
-    
+
     (cond
       (and (:healthy default-health) (:healthy fallback-health)
            default-has-data fallback-has-data)
-      (do
-        (println "Both processors healthy - default:" (:minResponseTime default-health) "ms, fallback:" (:minResponseTime fallback-health) "ms")
-        (if (<= (:minResponseTime default-health) (:minResponseTime fallback-health))
-          :default
-          :fallback))
-      
-      (and (:healthy default-health) default-has-data)
-      (do
-        (println "Only default processor is healthy")
-        :default)
-      
-      (and (:healthy fallback-health) fallback-has-data)
-      (do  
-        (println "Only fallback processor is healthy")
+      (if (<= (:minResponseTime default-health) (:minResponseTime fallback-health))
+        :default
         :fallback)
+
+      (and (:healthy default-health) default-has-data)
+      :default
+
+      (and (:healthy fallback-health) fallback-has-data)
+      :fallback
       
-      (and (not default-has-data) (not fallback-has-data))
-      (do
-        (println "No health data available yet - defaulting to default processor")
-        :default)
-      
-      :else 
-      (do
-        (println "Health status unclear - defaulting to default processor")
-        :default)))) 
+      :else
+      :default))) 
