@@ -30,22 +30,24 @@
       for _, item in ipairs(items) do
         local ok, data = pcall(cjson.decode, item)
         if ok and data.amount then
-        totalRequests = totalRequests + 1
-        totalAmount = totalAmount + tonumber(data.amount)
+          totalRequests = totalRequests + 1
+          totalAmount = totalAmount + tonumber(data.amount)
         end
       end
 
-      return {totalRequests, totalAmount}"
+      return {totalRequests, string.format('%.2f', totalAmount)}" ; Converts to string because redis can only return integers
             {:key (str "payments:" (name processor))}
             {:from (str from) :to (str to)})))
 
 (defn get-payments-summary
   "Gets payments summary from Redis counters with optional date filtering"
   [from to]
-  {:default  (zipmap [:totalRequests :totalAmount]
-                     (payment-summary :default (utils/iso->unix-ts from) (utils/iso->unix-ts to)))
-   :fallback (zipmap [:totalRequests :totalAmount]
-                     (payment-summary :fallback (utils/iso->unix-ts from) (utils/iso->unix-ts to)))})
+  {:default  (-> (zipmap [:totalRequests :totalAmount]
+                         (payment-summary :default (utils/iso->unix-ts from) (utils/iso->unix-ts to)))
+                 (update :totalAmount #(parse-double %))) 
+   :fallback (-> (zipmap [:totalRequests :totalAmount]
+                         (payment-summary :fallback (utils/iso->unix-ts from) (utils/iso->unix-ts to)))
+                 (update :totalAmount #(parse-double %)))})
 
 (defn enqueue-payment!
   "Enqueues a payment for processing"
@@ -68,7 +70,7 @@
   "Dequeues a payment for processing"
   []
   (try
-    (when-let[result (redis-cmd (car/brpoplpush queue-name processing-queue-name 5))] 
+    (when-let [result (redis-cmd (car/brpoplpush queue-name processing-queue-name 5))]
       (merge (utils/deserialize-message result) {:original_serialized_message result}))
     (catch Exception e
       (println "Failed to dequeue payment:" (.getMessage e)))))
@@ -84,4 +86,4 @@
   [message]
   (redis-cmd
    (car/lpush failed-queue-name
-               (utils/serialize-message message)))) 
+              (utils/serialize-message message))))

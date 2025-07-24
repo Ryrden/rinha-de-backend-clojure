@@ -26,8 +26,10 @@
   "Sends payment to a specific processor"
   [processor-url processor correlation-id amount timeout]
   (let [url (str processor-url "/payments")
+        requested-at (str (Instant/now))
         payload {:correlationId correlation-id
-                 :amount amount}]
+                 :amount amount
+                 :requested_at requested-at}]
     (try
       (let [{:keys [status]} @(http/post url
                                          {:headers {"Content-Type" "application/json"}
@@ -35,7 +37,7 @@
                                           :timeout timeout})]
         (condp = status
           200 (do
-                (save-payment-to-redis! correlation-id amount (str (Instant/now)) processor)
+                (save-payment-to-redis! correlation-id amount requested-at processor)
                 {:status 200 :message "Payment processed"})
           422 {:status 422 :message "Payment already exists"}
           500 {:status 500 :message "Processor failed"}
