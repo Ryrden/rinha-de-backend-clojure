@@ -1,7 +1,7 @@
 (ns rinha.core
   (:require [rinha.routes :as routes]
             [rinha.workers :as workers]
-            [rinha.health :as health]
+            [rinha.monitoring :as monitoring]
             [org.httpkit.server :as server])
   (:gen-class))
 
@@ -13,10 +13,10 @@
         fallback-url (System/getenv "PROCESSOR_FALLBACK_URL")]
     
     (println "Checking default processor health...")
-    (future (health/check-processor-health! default-url :default))
+    (future (monitoring/check-processor-health! default-url :default))
     
     (println "Checking fallback processor health...")  
-    (future (health/check-processor-health! fallback-url :fallback))
+    (future (monitoring/check-processor-health! fallback-url :fallback))
     
     (println "Health monitoring initialized")))
 

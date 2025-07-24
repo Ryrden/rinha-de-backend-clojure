@@ -1,13 +1,19 @@
-(ns rinha.health
+(ns rinha.monitoring
   (:require [org.httpkit.client :as http]
-            [rinha.redis-db :as redis]
+            [rinha.redis :as redis]
             [taoensso.carmine :as car]
-            [rinha.circuit-breaker :as cb]
             [muuntaja.core :as m])
   (:import [java.time Instant]))
 
 (def ^:private health-cache-ttl 5)
 (def ^:private health-check-timeout 3000)
+(def ^:private circuit-breaker-key "circuit-breaker:status")
+(def ^:private circuit-breaker-ttl 5)
+
+(defn ^:private current-timestamp
+  "Gets current timestamp in milliseconds"
+  []
+  (System/currentTimeMillis))
 
 (defn ^:private get-health-cache-key
   "Gets the Redis cache key for processor health"
@@ -18,6 +24,67 @@
   "Gets the Redis cache key for last health check timestamp"
   [processor]
   (str "health:last-check:" (name processor)))
+
+(defn ^:private set-circuit-breaker!
+  "Sets the circuit breaker to open state for TTL seconds"
+  [reason]
+  (let [timestamp (current-timestamp)]
+    (redis/redis-cmd
+     (car/setex circuit-breaker-key circuit-breaker-ttl 
+                (str timestamp ":" reason)))
+    (println "CIRCUIT BREAKER ACTIVATED - Reason:" reason)
+    (println "   System will reject requests for" circuit-breaker-ttl "seconds to prevent overheating")))
+
+(defn circuit-open?
+  "Checks if the circuit breaker is currently open"
+  []
+  (try
+    (let [circuit-data (redis/redis-cmd (car/get circuit-breaker-key))]
+      (if circuit-data
+        (let [[timestamp reason] (clojure.string/split circuit-data #":" 2)
+              breaker-time (Long/parseLong timestamp)
+              time-elapsed (- (current-timestamp) breaker-time)]
+          (if (< time-elapsed (* circuit-breaker-ttl 1000))
+            (do
+              (println "Circuit breaker is OPEN - Time remaining:" 
+                       (- (* circuit-breaker-ttl 1000) time-elapsed) "ms")
+              true)
+            (do
+              (println "Circuit breaker timeout expired, closing circuit breaker")
+              false)))
+        false))
+    (catch Exception e
+      (println "Circuit breaker check failed, assuming closed:" (.getMessage e))
+      false)))
+
+(defn activate-circuit-breaker!
+  "Activates circuit breaker when both processors fail"
+  []
+  (set-circuit-breaker! "Both processors failing"))
+
+(defn get-circuit-breaker-status
+  "Gets current circuit breaker status for monitoring"
+  []
+  (try
+    (if-let [circuit-data (redis/redis-cmd (car/get circuit-breaker-key))]
+      (let [[timestamp reason] (clojure.string/split circuit-data #":" 2)
+            breaker-time (Long/parseLong timestamp)
+            time-elapsed (- (current-timestamp) breaker-time)
+            remaining-time (- (* circuit-breaker-ttl 1000) time-elapsed)]
+        {:open true
+         :reason reason
+         :activated-at breaker-time
+         :remaining-ms (max 0 remaining-time)})
+      {:open false
+       :reason nil
+       :activated-at nil
+       :remaining-ms 0})
+    (catch Exception e
+      (println "Failed to get circuit breaker status:" (.getMessage e))
+      {:open false
+       :reason "Error checking status"
+       :activated-at nil
+       :remaining-ms 0})))
 
 (defn ^:private call-processor-health!
   "Calls the health endpoint of a processor and measures response time"
@@ -133,7 +200,7 @@
     (when (and default-has-data fallback-has-data
                (:failing default-health) (:failing fallback-health))
       (println "Both processors showing failing status - activating circuit breaker")
-      (cb/activate-circuit-breaker!))
+      (activate-circuit-breaker!))
     
     (cond
       (and (:healthy default-health) (:healthy fallback-health)

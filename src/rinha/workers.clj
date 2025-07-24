@@ -1,10 +1,8 @@
 (ns rinha.workers
   (:require [clojure.core.async :as async]
             [org.httpkit.client :as http]
-            [rinha.redis-db :as storage]
-            [rinha.queue :as queue]
-            [rinha.health :as health]
-            [rinha.circuit-breaker :as cb]
+            [rinha.redis :as redis]
+            [rinha.monitoring :as monitoring]
             [muuntaja.core :as m])
   (:import [java.time Instant]))
 
@@ -18,7 +16,7 @@
   "Saves payment to Redis"
   [correlation-id amount requested-at processor]
   (try
-    (let [result (storage/save-payment! correlation-id amount requested-at processor)]
+    (let [result (redis/save-payment! correlation-id amount requested-at processor)]
       (when-not (:success result)
         (println "Payment already exists in Redis:" correlation-id)))
     (catch Exception e
@@ -65,7 +63,7 @@
   [message]
   (let [{:keys [correlation-id amount retry-count]} message
         current-retry-count (or retry-count 0)
-        best-processor (health/get-best-processor)]
+        best-processor (monitoring/get-best-processor)]
         
         (println "Processing payment with best processor:" best-processor)
         
@@ -81,7 +79,7 @@
             (do
               (println "Primary processor" best-processor "failed, checking health and trying fallback")
               
-              (async/go (health/check-processor-health! primary-url best-processor))
+              (async/go (monitoring/check-processor-health! primary-url best-processor))
               
               (let [fallback-processor (if (= best-processor :default) :fallback :default)
                     fallback-url (get-processor-url fallback-processor)
@@ -92,7 +90,7 @@
                                                                 5000)]
                 
                 (when (not= (:status fallback-result) 200)
-                  (async/go (health/check-processor-health! fallback-url fallback-processor)))
+                  (async/go (monitoring/check-processor-health! fallback-url fallback-processor)))
                 
                 (if (= (:status fallback-result) 200)
                   fallback-result
@@ -100,7 +98,7 @@
                   (do
                     (println "Both processors failed - evaluating circuit breaker activation")
                     
-                    (cb/activate-circuit-breaker!)
+                    (monitoring/activate-circuit-breaker!)
                     
                     (if (should-retry? (:status fallback-result) current-retry-count)
                       {:status :retry 
@@ -119,7 +117,7 @@
   (async/go
     (async/<! (async/timeout retry-delay-ms))
     (let [retry-message (assoc message :retry-count (:retry-count message))]
-      (queue/enqueue-payment! (:correlation-id retry-message) (:amount retry-message) (:retry-count retry-message))
+      (redis/enqueue-payment! (:correlation-id retry-message) (:amount retry-message) (:retry-count retry-message))
       (println "Worker" worker-id "re-enqueued payment after delay. Retry count:" (:retry-count retry-message)))))
 
 (defn ^:private worker-loop!
@@ -134,41 +132,41 @@
                 (println "Worker" worker-id "received stop signal")
                 (throw (ex-info "stop-requested" {})))
               
-              (if (cb/circuit-open?)
-                (do
+              (if (monitoring/circuit-open?)
+          (do
                   (println "Worker" worker-id "paused - circuit breaker is OPEN")
                   (async/<! (async/timeout 1000))
                   true)
                 
                 
                 (let [message (try 
-                                (queue/dequeue-payment!)
+                                (redis/dequeue-payment!)
                                 (catch Exception e
                                   (println "Worker" worker-id "dequeue failed:" (.getMessage e))
                                   nil))]
                   (if message
                     (do
                       (try
-                        (let [result (process-payment-with-retries! (dissoc message :original_serialized_message))]
-                          (condp = (:status result)
-                            200
-                            (do
-                              (queue/mark-payment-as-completed! message)
-                              (println "Worker" worker-id "processed payment successfully: 200"))
-                            
-                            :retry
-                            (do
-                              (handle-retry-payment! (merge (dissoc message :original_serialized_message) 
-                                                            {:retry-count (:retry-count result)}) worker-id)
-                              (queue/mark-payment-as-completed! message))
-                            
-                            (do
-                              (queue/enqueue-failed-payment! (dissoc message :original_serialized_message))
-                              (queue/mark-payment-as-completed! message)
+               (let [result (process-payment-with-retries! (dissoc message :original_serialized_message))]
+                 (condp = (:status result)
+                   200
+                   (do
+                     (redis/mark-payment-as-completed! message)
+                     (println "Worker" worker-id "processed payment successfully: 200"))
+                   
+                   :retry
+                   (do
+                     (handle-retry-payment! (merge (dissoc message :original_serialized_message) 
+                                                   {:retry-count (:retry-count result)}) worker-id)
+                     (redis/mark-payment-as-completed! message))
+                   
+                   (do
+                     (redis/enqueue-failed-payment! (dissoc message :original_serialized_message))
+                     (redis/mark-payment-as-completed! message)
                               (println "Worker" worker-id "payment failed permanently after retries:" (:status result)))))
                         (catch Exception e
                           (println "Worker" worker-id "error processing payment:" (.getMessage e))
-                          (queue/mark-payment-as-completed! message)))
+                          (redis/mark-payment-as-completed! message)))
                       true)
                     (do
                       (async/<! (async/timeout 100))

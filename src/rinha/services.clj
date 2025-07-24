@@ -1,8 +1,6 @@
 (ns rinha.services
-  (:require [rinha.redis-db :as storage]
-            [rinha.logic :as logic]
-            [rinha.queue :as queue]
-            [rinha.circuit-breaker :as cb])
+  (:require [rinha.redis :as redis]
+            [rinha.utils :as utils])
   (:import [java.time Instant]))
 
 (defn get-hello-world!
@@ -15,10 +13,10 @@
 (defn process-payment!
   "Enqueues a payment for processing by workers"
   [correlation-id amount]
-  (if-not (logic/valid-payment-data? {:correlationId correlation-id :amount amount})
+  (if-not (utils/valid-payment-data? {:correlationId correlation-id :amount amount})
     {:success false :error "Invalid payment data"}
     
-    (let [enqueue-result (queue/enqueue-payment! correlation-id amount)]
+    (let [enqueue-result (redis/enqueue-payment! correlation-id amount)]
       (if (:success enqueue-result)
         {:success true}
         {:success false :error "Failed to enqueue payment"}))))
@@ -27,8 +25,8 @@
   "Gets payments summary with optional date filters from Redis"
   [from to]
   (try
-    (storage/get-payments-summary from to)
+    (redis/get-payments-summary from to)
     (catch Exception e
       (println "Redis error in summary query:" (.getMessage e))
       {:default {:totalRequests 0 :totalAmount 0.0}
-       :fallback {:totalRequests 0 :totalAmount 0.0}})))
+       :fallback {:totalRequests 0 :totalAmount 0.0}}))) 

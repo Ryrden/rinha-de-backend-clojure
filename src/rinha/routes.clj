@@ -23,4 +23,4 @@
                          exception/exception-middleware]}})
    (ring/routes
     (ring/create-default-handler
-     {:not-found (constantly {:status 404 :body {:error "Not found"}})}))))
+     {:not-found (constantly {:status 404 :body {:error "Not found"}})})))) 

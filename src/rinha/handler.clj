@@ -32,4 +32,4 @@
   (let [from (get query-params "from")
         to (get query-params "to")]
     {:status 200
-     :body (services/get-payments-summary from to)}))
+     :body (services/get-payments-summary from to)})) 
