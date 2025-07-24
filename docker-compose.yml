@@ -33,7 +33,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
+          cpus: "0.2"
           memory: "16mb"
     networks:
       - backend
@@ -50,7 +50,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.6"
+          cpus: "0.575"
           memory: "162mb"
     ports:
       - "8080:8080"
@@ -78,7 +78,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.6"
+          cpus: "0.575"
           memory: "162mb"
     ports:
       - "8081:8081"
