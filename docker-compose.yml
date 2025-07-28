@@ -41,8 +41,7 @@ services:
       - backend
 
   api-01:
-    # image: ryrden/rinha-de-backend-clojure:latest
-    build: .
+    image: ryrden/rinha-de-backend-clojure:latest
     environment:
       - PORT=8080
       - NUM_WORKERS=5
@@ -69,8 +68,7 @@ services:
       - payment-processor
 
   api-02:
-    # image: ryrden/rinha-de-backend-clojure:latest
-    build: .
+    image: ryrden/rinha-de-backend-clojure:latest
     environment:
       - PORT=8081
       - NUM_WORKERS=5

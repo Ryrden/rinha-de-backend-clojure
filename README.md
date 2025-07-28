@@ -8,23 +8,24 @@ Competition repository [here](https://github.com/zanfranceschi/rinha-de-backend-
 
 ## Tech Stack
 
-- **Clojure 1.12.1** - Functional programming language
-- **HTTP-kit** - High-performance HTTP server
-- **Reitit** - Data-driven routing library
-- **Redis 7** - In-memory data store for queuing and caching
-- **Nginx** - Load balancer and reverse proxy
-
-### System Features
-
-- **Circuit Breaker Pattern** - Automatic failure detection and recovery
-- **Health Monitoring** - Real-time processor health checks
-- **Async Workers** - Background payment processing
-- **Load Balancing** - Multiple API instances with Nginx
-- **JVM Tuning** - Optimized for low-latency performance
+- Clojure 1.12.1
+- Reitit (HTTP framework)
+- HTTP-kit (Another HTTP framework)
+- Redis 7 (Storage, cache and Reliables Queues)
+- Nginx
 
 ## How to Run
 
-T.B.D
+Build the image with the command: `docker buildx build -t ryrden/rinha-de-backend-clojure:latest .`
+
+Up the containers:
+
+```bash
+cd payment-processor
+docker-compose up -d
+cd ..
+docker-compose up -d
+```
 
 The API will be available at `http://localhost:9999`
 
