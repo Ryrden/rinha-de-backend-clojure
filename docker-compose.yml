@@ -8,8 +8,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.15"
-          memory: "10mb"
+          cpus: "0.2"
+          memory: "14mb"
     depends_on:
       api-01:
         condition: service_healthy
@@ -23,7 +23,9 @@ services:
     ports:
       - "6379:6379"
     volumes:
+      - ./scripts/redis.conf:/usr/local/etc/redis/redis.conf:ro
       - redis_data:/data
+    command: redis-server /usr/local/etc/redis/redis.conf
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 30s
@@ -33,7 +35,7 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.2"
+          cpus: "0.3"
           memory: "16mb"
     networks:
       - backend
@@ -50,8 +52,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.575"
-          memory: "162mb"
+          cpus: "0.5"
+          memory: "160mb"
     ports:
       - "8080:8080"
     healthcheck:
@@ -78,8 +80,8 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "0.575"
-          memory: "162mb"
+          cpus: "0.5"
+          memory: "160mb"
     ports:
       - "8081:8081"
     healthcheck:
