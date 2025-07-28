@@ -31,9 +31,9 @@
                  :requested_at requested-at}]
     (try
       (let [{:keys [status]} @(http/post url
-                                              {:headers {"Content-Type" "application/json"}
-                                               :body (m/encode m/instance "application/json" payload)
-                                               :timeout timeout})]
+                                         {:headers {"Content-Type" "application/json"}
+                                          :body (m/encode m/instance "application/json" payload)
+                                          :timeout timeout})]
         (condp = status
           200 (do
                 (println "Payment successfully processed by" processor "for correlation-id:" correlation-id)
@@ -51,7 +51,7 @@
   "Determines if a payment should be retried based on status and retry count"
   [status retry-count]
   (and (< retry-count max-retries)
-       (or (= status 500) (nil? status))))
+       (contains? #{500 nil} status)))
 
 (defn ^:private get-processor-url
   "Gets the URL for a processor"
@@ -74,9 +74,9 @@
                                                      correlation-id
                                                      amount
                                                      5000)]
-      (if (= (:status primary-result) 200)
-        primary-result
-
+      (case (:status primary-result)
+        200 primary-result
+        422 primary-result
         (do
           (async/go (monitoring/check-processor-health! primary-url best-processor))
 

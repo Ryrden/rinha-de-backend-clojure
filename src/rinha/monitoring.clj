@@ -62,30 +62,6 @@
   []
   (set-circuit-breaker! "Both processors failing"))
 
-(defn get-circuit-breaker-status
-  "Gets current circuit breaker status for monitoring"
-  []
-  (try
-    (if-let [circuit-data (redis/redis-cmd (car/get circuit-breaker-key))]
-      (let [[timestamp reason] (clojure.string/split circuit-data #":" 2)
-            breaker-time (Long/parseLong timestamp)
-            time-elapsed (- (current-timestamp) breaker-time)
-            remaining-time (- (* circuit-breaker-ttl 1000) time-elapsed)]
-        {:open true
-         :reason reason
-         :activated-at breaker-time
-         :remaining-ms (max 0 remaining-time)})
-      {:open false
-       :reason nil
-       :activated-at nil
-       :remaining-ms 0})
-    (catch Exception e
-      (println "Failed to get circuit breaker status:" (.getMessage e))
-      {:open false
-       :reason "Error checking status"
-       :activated-at nil
-       :remaining-ms 0})))
-
 (defn ^:private call-processor-health!
   "Calls the health endpoint of a processor and measures response time"
   [processor-url processor]
