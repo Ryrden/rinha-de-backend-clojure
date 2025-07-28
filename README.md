@@ -202,24 +202,16 @@ sequenceDiagram
     participant API
     participant Service
     participant Redis
-    
+
     Client->>+API: GET /payments-summary?from=...&to=...
     API->>+Service: Get payments summary
     Service->>Service: Parse date filters
-    
-    Note over Service,Redis: Parallel Lua Script Execution
-    
-    par Default Processor Data
-        Service->>+Redis: EVAL Lua script<br/>ZRANGEBYSCORE payments:default
-        Note over Redis: Lua Script:<br/>• Query sorted set by timestamp<br/>• Decode JSON payloads<br/>• Aggregate count & amount
-        Redis-->>-Service: {totalRequests, totalAmount}
-    and Fallback Processor Data  
-        Service->>+Redis: EVAL Lua script<br/>ZRANGEBYSCORE payments:fallback
-        Note over Redis: Same Lua aggregation<br/>for fallback processor
-        Redis-->>-Service: {totalRequests, totalAmount}
-    end
-    
-    Service->>Service: Combine results
+
+    Service->>+Redis: EVAL Lua script<br/>ZRANGEBYSCORE payments:summary
+    Note over Redis: Lua Script:<br/>• Query sorted set by timestamp<br/>• Decode JSON payloads<br/>• Group by processor<br/>• Aggregate count & amount
+
+    Redis-->>-Service: {default: {totalRequests, totalAmount}, fallback: {...}}
+
     Service-->>-API: Summary response
     API-->>-Client: JSON summary
 ```

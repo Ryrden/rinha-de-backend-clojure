@@ -8,6 +8,9 @@ RUN lein deps
 
 COPY src/ src/
 
+# Just for allow use summary.lua 
+COPY resources/ resources/ 
+
 RUN lein uberjar
 
 FROM eclipse-temurin:21-jre-alpine

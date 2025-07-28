@@ -1,5 +1,6 @@
 (ns rinha.redis
   (:require [taoensso.carmine :as car]
+            [clojure.java.io :as io]
             [rinha.utils :as utils]))
 
 (def redis-conn {:pool {} :spec {:uri (System/getenv "REDIS_URL")}})
@@ -11,43 +12,34 @@
 (def ^:private processing-queue-name "payment-processing-queue")
 (def ^:private failed-queue-name "payment-failed")
 
+(def summary-lua (slurp (io/resource "summary.lua")))
+
 (defn save-payment!
   [correlation_id amount requested_at processor]
-  (let [key (str "payments:" (name processor))
+  (let [key "payments:summary"
         payload (utils/serialize-message {:correlation_id correlation_id
                                           :amount amount
-                                          :requested_at (utils/iso->unix-ts requested_at)})]
+                                          :requested_at (utils/iso->unix-ts requested_at)
+                                          :processor (name processor)})]
     (redis-cmd (car/zadd key (utils/iso->unix-ts requested_at) payload))))
 
 (defn payment-summary
-  [processor from to]
+  [from to]
   (redis-cmd
-   (car/lua "
-      local items = redis.call('ZRANGEBYSCORE', _:key, _:from, _:to)
-      local totalRequests = 0
-      local totalAmount = 0.0
-
-      for _, item in ipairs(items) do
-        local ok, data = pcall(cjson.decode, item)
-        if ok and data.amount then
-          totalRequests = totalRequests + 1
-          totalAmount = totalAmount + tonumber(data.amount)
-        end
-      end
-
-      return {totalRequests, string.format('%.2f', totalAmount)}" ; Converts to string because redis can only return integers
-            {:key (str "payments:" (name processor))}
-            {:from (str from) :to (str to)})))
+   (car/lua
+    summary-lua
+    {:key "payments:summary"}
+    {:from (str from)
+     :to (str to)})))
 
 (defn get-payments-summary
   "Gets payments summary from Redis counters with optional date filtering"
   [from to]
-  {:default  (-> (zipmap [:totalRequests :totalAmount]
-                         (payment-summary :default (utils/iso->unix-ts from) (utils/iso->unix-ts to)))
-                 (update :totalAmount #(parse-double %))) 
-   :fallback (-> (zipmap [:totalRequests :totalAmount]
-                         (payment-summary :fallback (utils/iso->unix-ts from) (utils/iso->unix-ts to)))
-                 (update :totalAmount #(parse-double %)))})
+  (let [result (payment-summary (utils/iso->unix-ts from) (utils/iso->unix-ts to))]
+    {:default {:totalRequests (nth result 0)
+               :totalAmount (parse-double (nth result 1))}
+     :fallback {:totalRequests (nth result 2)
+                :totalAmount (parse-double (nth result 3))}}))
 
 (defn enqueue-payment!
   "Enqueues a payment for processing"
