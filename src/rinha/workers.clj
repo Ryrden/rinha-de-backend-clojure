@@ -35,8 +35,7 @@
                                           :body (m/encode m/instance "application/json" payload)
                                           :timeout timeout})]
         (condp = status
-          200 (do
-                (println "Payment successfully processed by" processor "for correlation-id:" correlation-id)
+          200 (do 
                 (save-payment-to-redis! correlation-id amount requested-at processor)
                 {:status 200 :message "Payment processed"})
           422 {:status 422 :message "Payment already exists"}
@@ -134,7 +133,6 @@
                   (println "Worker" worker-id "paused - circuit breaker is OPEN")
                   (async/<! (async/timeout 1000))
                   true)
-
 
                 (let [message (try
                                 (redis/dequeue-payment!)

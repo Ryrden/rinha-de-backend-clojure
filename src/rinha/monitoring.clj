@@ -5,10 +5,9 @@
             [muuntaja.core :as m])
   (:import [java.time Instant]))
 
-(def ^:private health-cache-ttl 5)
-(def ^:private health-check-timeout 3000)
+(def ^:private health-cache-ttl 10)
 (def ^:private circuit-breaker-key "circuit-breaker:status")
-(def ^:private circuit-breaker-ttl 5)
+(def ^:private circuit-breaker-ttl 2)
 
 (defn ^:private current-timestamp
   "Gets current timestamp in milliseconds"
@@ -65,44 +64,24 @@
 (defn ^:private call-processor-health!
   "Calls the health endpoint of a processor and measures response time"
   [processor-url processor]
-  (let [url (str processor-url "/payments/service-health")
-        start-time (System/currentTimeMillis)]
-    (try
-      (let [{:keys [status body]} @(http/get url {:timeout health-check-timeout})]
-        (let [end-time (System/currentTimeMillis)
-              response-time (- end-time start-time)]
-          (if (= status 200)
-            (try
-              (let [health-data (m/decode m/instance "application/json" body)
-                    processor-failing (get health-data "failing" false)]
-                {:processor processor
-                 :minResponseTime response-time
-                 :failing processor-failing
-                 :healthy (not processor-failing)
-                 :data health-data
-                 :checked-at (System/currentTimeMillis)})
-              (catch Exception e
-                (println "Failed to parse health response for" processor ":" (.getMessage e))
-                {:processor processor
-                 :minResponseTime 0
-                 :failing false
-                 :healthy false
-                 :error "Invalid health response"
-                 :checked-at (System/currentTimeMillis)}))
-            {:processor processor
-             :minResponseTime 0
-             :failing true
-             :healthy false
-             :error (str "HTTP " status)
-             :checked-at (System/currentTimeMillis)})))
-      (catch Exception e
-        (println "Health check failed for" processor ":" (.getMessage e))
-        {:processor processor
-         :minResponseTime 0
-         :failing true
-         :healthy false
-         :error (.getMessage e)
-         :checked-at (System/currentTimeMillis)}))))
+  (try
+    (let [{:keys [status body]} @(http/get (str processor-url "/payments/service-health"))
+          health-data           (m/decode m/instance "application/json" body)] 
+      (if (= status 200) 
+        {:processor       processor
+         :minResponseTime (:minResponseTime health-data)
+         :healthy         (not (:failing health-data)) 
+         :checked-at      (System/currentTimeMillis)}
+        {:processor       processor
+         :minResponseTime 5000 
+         :healthy         false 
+         :checked-at      (System/currentTimeMillis)}))
+  (catch Exception e
+    (println "Health check failed for" processor ":" (.getMessage e))
+    {:processor       processor
+     :minResponseTime 5000 
+     :healthy         false 
+     :checked-at      (System/currentTimeMillis)})))
 
 (defn ^:private store-health-status!
   "Stores processor health status in Redis cache"
@@ -133,7 +112,7 @@
       (let [last-check-time (redis/redis-cmd (car/get last-check-key))]
         (if last-check-time
           (let [time-since-check (- (System/currentTimeMillis) (Long/parseLong last-check-time))]
-            (> time-since-check (* health-cache-ttl 1000)))
+            (> time-since-check 5000))
           true))
       (catch Exception e
         (println "Failed to check health cooldown for" processor ":" (.getMessage e))
@@ -149,10 +128,8 @@
         (store-health-status! health-status)
         (println "Health check completed for" processor "- healthy:" (:healthy health-status) 
                  ", response-time:" (:minResponseTime health-status) "ms")
-        health-status))
-    (do
-      (println "Health check for" processor "skipped due to cooldown")
-      (get-cached-health-status processor))))
+        health-status)) 
+      (get-cached-health-status processor)))
 
 (defn get-processor-health-status
   "Gets current processor health status from cache"
